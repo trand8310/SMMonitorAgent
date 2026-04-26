@@ -602,6 +602,13 @@ public sealed class WsMonitorAgent
         if (root.TryGetProperty("payload", out var payload))
         {
             appName = payload.TryGetProperty("name", out var name) ? (name.GetString() ?? "") : "";
+            if (string.IsNullOrWhiteSpace(appName) &&
+                payload.TryGetProperty("args", out var args) &&
+                args.ValueKind == JsonValueKind.Object &&
+                args.TryGetProperty("name", out var argsName))
+            {
+                appName = argsName.GetString() ?? "";
+            }
             imageFormat = payload.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg";
 
             if (payload.TryGetProperty("quality", out var q) && q.TryGetInt32(out var qv))

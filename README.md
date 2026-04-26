@@ -211,6 +211,26 @@ C:\ProgramData\SMMonitorAgent\status.json
 }
 ```
 
+### 管道通信 DEMO（被监控程序 -> Agent -> Manager/Web）
+
+仓库里提供了示例程序：`demo/NamedPipeClientDemo`。
+
+运行方式（Windows）：
+
+```bash
+cd demo/NamedPipeClientDemo
+dotnet run -- DemoOrderApp
+```
+
+它会每秒向固定管道 `SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d` 写入一行 JSON（带 `app` 字段）。
+
+联调步骤：
+
+1. 启动 `SMMonitor.Agent.Service`，并在管理工具中启用“管道转发”。  
+2. 打开 `SMMonitor.Agent.Manager` 的“日志”页，可直接看到 Service/App 分类日志。  
+3. 打开 `php/index.html`，切到“实时日志”页查看转发内容。  
+4. 若希望 Web 端实时主动推送，先在详情页打开 `pipe_live_push` 开关（默认关闭防消息风暴）。
+
 ```json
 {
   "type": "request",

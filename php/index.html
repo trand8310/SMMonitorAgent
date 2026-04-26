@@ -309,6 +309,10 @@
                 <div class="muted">
                   CPU {{ formatPercent(app.cpuPercent) }} / 内存 {{ formatMb(app.memoryUsedMb) }}
                 </div>
+                <div style="margin-top:4px;">
+                  <el-button size="small" type="success" plain @click="quickStartMonitoredApp(row, app)">启动</el-button>
+                  <el-button size="small" type="danger" plain @click="quickStopMonitoredApp(row, app)">停止</el-button>
+                </div>
               </div>
             </div>
             <div v-else class="muted">未配置</div>
@@ -369,8 +373,8 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="get_config">获取配置</el-dropdown-item>
-                    <el-dropdown-item divided command="app_start">启动应用</el-dropdown-item>
-                    <el-dropdown-item command="app_stop">停止应用</el-dropdown-item>
+                    <el-dropdown-item divided command="app_start">手动启动应用</el-dropdown-item>
+                    <el-dropdown-item command="app_stop">手动停止应用</el-dropdown-item>
                     <el-dropdown-item divided command="app_screenshot">应用截图</el-dropdown-item>
                     <el-dropdown-item command="screen_screenshot">屏幕截图</el-dropdown-item>
                     <el-dropdown-item command="agent_reboot">Agent兼容重启</el-dropdown-item>
@@ -585,9 +589,26 @@
         </el-form>
       </template>
 
-      <template v-if="commandType === 'app_screenshot' || commandType === 'screen_screenshot'">
+      <template v-if="commandType === 'app_screenshot'">
         <el-alert
-          :title="commandType === 'app_screenshot' ? '将请求客户机返回应用截图' : '将请求客户机返回屏幕截图'"
+          title="请选择监控列表中的应用后执行截图"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom:10px;"
+        ></el-alert>
+        <el-form label-width="100px">
+          <el-form-item label="监控应用">
+            <el-select v-model="commandForm.appScreenshot.name" filterable placeholder="请选择应用" style="width: 320px">
+              <el-option v-for="app in getMonitoredApps(currentClient)" :key="app.name" :label="app.name" :value="app.name"></el-option>
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </template>
+
+      <template v-if="commandType === 'screen_screenshot'">
+        <el-alert
+          title="将请求客户机返回系统屏幕截图"
           type="info"
           :closable="false"
           show-icon
@@ -683,7 +704,8 @@
           livePushResultText: '',
           commandForm: {
             appStart: { name: '', filePath: '', arguments: '' },
-            appStop: { name: '', processId: 0 }
+            appStop: { name: '', processId: 0 },
+            appScreenshot: { name: '' }
           },
 
           pollTimer: null
@@ -996,6 +1018,44 @@
           }
         },
 
+        async quickStartMonitoredApp(row, app) {
+          if (!row?.clientId || !app?.name) return
+          try {
+            const { result } = await this.sendAndWait(
+              row.clientId,
+              'command',
+              { command: 'app_start', args: { name: app.name } }
+            )
+            if (result?.success && result?.status === 'done') {
+              ElMessage.success(`已下发启动：${app.name}`)
+              this.loadClients(false)
+            } else {
+              ElMessage.warning(`启动返回异常：${app.name}`)
+            }
+          } catch (err) {
+            ElMessage.error(err.message || `启动失败：${app.name}`)
+          }
+        },
+
+        async quickStopMonitoredApp(row, app) {
+          if (!row?.clientId || !app?.name) return
+          try {
+            const { result } = await this.sendAndWait(
+              row.clientId,
+              'command',
+              { command: 'app_stop', args: { name: app.name } }
+            )
+            if (result?.success && result?.status === 'done') {
+              ElMessage.success(`已下发停止：${app.name}`)
+              this.loadClients(false)
+            } else {
+              ElMessage.warning(`停止返回异常：${app.name}`)
+            }
+          } catch (err) {
+            ElMessage.error(err.message || `停止失败：${app.name}`)
+          }
+        },
+
         openSettingDialog(row) {
           this.currentClient = row
           this.settingDialogVisible = true
@@ -1126,8 +1186,8 @@
           }
 
           const titleMap = {
-            app_start: '启动应用',
-            app_stop: '停止应用',
+            app_start: '手动启动应用',
+            app_stop: '手动停止应用',
             app_screenshot: '应用截图',
             screen_screenshot: '屏幕截图',
             agent_reboot: 'Agent兼容重启'
@@ -1146,6 +1206,10 @@
 
           if (command === 'app_stop') {
             this.commandForm.appStop = { name: '', processId: 0 }
+          }
+
+          if (command === 'app_screenshot') {
+            this.commandForm.appScreenshot = { name: this.getMonitoredApps(row)?.[0]?.name || '' }
           }
         },
 
@@ -1204,6 +1268,15 @@
             }
 
             payload.args = { name, processId }
+          }
+
+          if (this.commandType === 'app_screenshot') {
+            const name = (this.commandForm.appScreenshot.name || '').trim()
+            if (!name) {
+              ElMessage.warning('请选择监控应用')
+              return
+            }
+            payload.args = { name }
           }
 
           this.commandLoading = true
