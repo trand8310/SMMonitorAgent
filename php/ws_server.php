@@ -537,6 +537,36 @@ $server->on('Request', function (Request $request, Response $response) use ($ser
         return;
     }
 
+    if ($path === '/pipe_messages') {
+        $limit = (int)($request->get['limit'] ?? 200);
+        $limit = max(1, min(1000, $limit));
+        $clientId = trim((string)($request->get['clientId'] ?? ''));
+
+        $rows = [];
+        $items = $redis->lRange($prefix . 'pipe_messages', 0, $limit * 3) ?: [];
+        foreach ($items as $raw) {
+            $decoded = json_decode((string)$raw, true);
+            if (!is_array($decoded)) {
+                continue;
+            }
+            if ($clientId !== '' && (string)($decoded['clientId'] ?? '') !== $clientId) {
+                continue;
+            }
+            $rows[] = $decoded;
+            if (count($rows) >= $limit) {
+                break;
+            }
+        }
+
+        send_json($response, [
+            'success' => true,
+            'logs' => $rows,
+            'data' => $rows,
+            'time' => now_ts(),
+        ]);
+        return;
+    }
+
     if ($path === '/send') {
         if ($method !== 'POST') {
             send_json($response, ['success' => false, 'message' => 'method not allowed'], 405);

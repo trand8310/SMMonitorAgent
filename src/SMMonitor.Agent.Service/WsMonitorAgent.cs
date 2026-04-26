@@ -40,6 +40,7 @@ public sealed class WsMonitorAgent
         await ws.ConnectAsync(new Uri(_settings.ServerUrl), token);
 
         _logger.LogInformation("WebSocket connected.");
+        await ManagerPipePublisher.TryPublishAsync("Service", "WsMonitorAgent", "WebSocket connected", token);
 
         AgentConfigStore.SaveStatus(new AgentStatus
         {
@@ -166,6 +167,7 @@ public sealed class WsMonitorAgent
                     content = message.Content
                 }
             }, token);
+            await ManagerPipePublisher.TryPublishAsync("App", "PipeForward", message.Content, token);
         }, token);
     }
 
@@ -250,6 +252,7 @@ public sealed class WsMonitorAgent
 
             var requestId = root.TryGetProperty("requestId", out var reqEl) ? reqEl.GetString() ?? "" : "";
             var action = root.TryGetProperty("action", out var actionEl) ? actionEl.GetString() ?? "" : "";
+            await ManagerPipePublisher.TryPublishAsync("Service", "WsRequest", $"action={action}, requestId={requestId}", token);
 
             AgentConfigStore.SaveStatus(new AgentStatus
             {

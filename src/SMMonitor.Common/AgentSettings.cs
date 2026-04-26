@@ -2,6 +2,7 @@ namespace SMMonitor.Common;
 
 public sealed class AgentSettings
 {
+    public const string FixedPipeName = "SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d";
     public string ServerUrl { get; set; } = "ws://127.0.0.1:9502";
     public string Token { get; set; } = "your-token";
     public string ClientId { get; set; } = "";
@@ -34,7 +35,7 @@ public sealed class AgentSettings
     /// <summary>
     /// 应用推送实时消息的命名管道标识（名称）。
     /// </summary>
-    public string AppPipeName { get; set; } = "";
+    public string AppPipeName { get; set; } = FixedPipeName;
 
     /// <summary>
     /// 是否启用应用命名管道消息转发到管理后台。

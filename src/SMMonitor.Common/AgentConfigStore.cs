@@ -192,21 +192,6 @@ public static class AgentConfigStore
 
     private static string NormalizePipeName(string? raw)
     {
-        var value = (raw ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return "";
-        }
-
-        value = value.Replace("\\\\.\\pipe\\", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("/", "")
-            .Replace("\\", "");
-
-        if (value.Length > 128)
-        {
-            value = value[..128];
-        }
-
-        return value;
+        return AgentSettings.FixedPipeName;
     }
 }

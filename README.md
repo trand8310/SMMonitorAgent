@@ -192,6 +192,8 @@ C:\ProgramData\SMMonitorAgent\status.json
 
 - `EnablePipeForward`：是否启用管道转发。
 - `AppPipeName`：管道标识（可点击生成 GUID 格式）。
+- 当前版本管道名固定为：`SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d`（便于客户端程序统一对接）。
+- Manager 调试日志监听管道：`SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d_manager`。
 - `pipe_live_push` 默认关闭，避免消息风暴；建议在 `index.html` 选择客户端与应用后动态打开。
 
 应用端只需写入文本行到命名管道（UTF-8，每行一条），Agent 会转发为：
