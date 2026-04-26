@@ -40,6 +40,7 @@ public sealed class MainForm : Form
     private readonly Label _lblError = new();
 
     private readonly System.Windows.Forms.Timer _timer = new();
+    private readonly CancellationTokenSource _loopCts = new();
 
     public MainForm()
     {
@@ -58,7 +59,9 @@ public sealed class MainForm : Form
         _timer.Tick += (_, _) => RefreshStatus();
         _timer.Start();
 
-        _ = Task.Run(() => PipeLogLoopAsync(CancellationToken.None));
+        _ = Task.Run(() => PipeLogLoopAsync(_loopCts.Token));
+        _ = Task.Run(() => ManagerCommandServer.RunAsync(AddLog, _loopCts.Token));
+        FormClosing += (_, _) => _loopCts.Cancel();
     }
 
     private void BuildUi()

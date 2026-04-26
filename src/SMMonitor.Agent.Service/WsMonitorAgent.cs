@@ -360,6 +360,8 @@ public sealed class WsMonitorAgent
             args = payload.TryGetProperty("args", out var a) ? a : default;
         }
 
+        await ManagerPipePublisher.TryPublishAsync("Service", "Command", $"requestId={requestId}, command={command}", token);
+
         switch (command.ToLowerInvariant())
         {
             case "app_start":
@@ -433,23 +435,31 @@ public sealed class WsMonitorAgent
             }
         }
 
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            await SendResponseAsync(ws, requestId, false, "filePath required", token);
-            return;
-        }
-
         try
         {
-            var info = new ProcessStartInfo
-            {
-                FileName = filePath,
-                Arguments = appArgs,
-                WorkingDirectory = Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory,
-                UseShellExecute = true
-            };
+            Process? startedProcess = null;
+            var launchTarget = filePath;
 
-            var startedProcess = Process.Start(info);
+            if (string.IsNullOrWhiteSpace(launchTarget))
+            {
+                launchTarget = name.Trim();
+            }
+
+            if (string.IsNullOrWhiteSpace(launchTarget))
+            {
+                await ManagerPipePublisher.TryPublishAsync("Service", "AppStart", "failed: filePath/name both empty", token);
+                await SendResponseAsync(ws, requestId, false, "filePath or name required", token);
+                return;
+            }
+
+            startedProcess = TryStartProcess(launchTarget, appArgs);
+
+            if (startedProcess == null && !launchTarget.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                launchTarget += ".exe";
+                startedProcess = TryStartProcess(launchTarget, appArgs);
+            }
+
             await SendJsonAsync(ws, new
             {
                 type = "response",
@@ -459,16 +469,25 @@ public sealed class WsMonitorAgent
                 msg = startedProcess != null ? "app started" : "start failed",
                 data = new
                 {
-                    name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(filePath) : name,
-                    filePath,
+                    name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(launchTarget) : name,
+                    filePath = launchTarget,
                     arguments = appArgs,
                     processId = startedProcess?.Id ?? 0
                 },
                 ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             }, token);
+
+            await ManagerPipePublisher.TryPublishAsync(
+                "Service",
+                "AppStart",
+                startedProcess != null
+                    ? $"success: target={launchTarget}, pid={startedProcess.Id}"
+                    : $"failed: target={launchTarget}, args={appArgs}",
+                token);
         }
         catch (Exception ex)
         {
+            await ManagerPipePublisher.TryPublishAsync("Service", "AppStart", $"exception: {ex.Message}", token);
             await SendResponseAsync(ws, requestId, false, ex.Message, token);
         }
     }
@@ -537,6 +556,24 @@ public sealed class WsMonitorAgent
             },
             ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
         }, token);
+
+        await ManagerPipePublisher.TryPublishAsync(
+            "Service",
+            "AppStop",
+            $"name={name}, pid={processId}, killed={killed}, errors={errors.Count}",
+            token);
+    }
+
+    private static Process? TryStartProcess(string fileName, string arguments)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            WorkingDirectory = Path.GetDirectoryName(fileName) ?? Environment.CurrentDirectory,
+            UseShellExecute = true
+        };
+        return Process.Start(info);
     }
 
     private MonitoredAppProfile? FindProfileByName(string name)
@@ -574,12 +611,23 @@ public sealed class WsMonitorAgent
             }
         }
 
-        var screenshot = ScreenshotHelper.TryCapturePrimaryScreen(imageFormat, quality);
+        var screenshot = await TryCaptureScreenAsync(imageFormat, quality, token);
         if (!screenshot.Ok)
         {
+            await ManagerPipePublisher.TryPublishAsync(
+                "Service",
+                "ScreenShot",
+                $"scope=screen, ok=false, error={screenshot.Error}",
+                token);
             await SendResponseAsync(ws, requestId, false, screenshot.Error ?? "capture screen failed", token);
             return;
         }
+
+        await ManagerPipePublisher.TryPublishAsync(
+            "Service",
+            "ScreenShot",
+            $"scope=screen, ok=true, width={screenshot.Width}, height={screenshot.Height}, contentType={screenshot.ContentType}",
+            token);
 
         await SendJsonAsync(ws, new
         {
@@ -617,12 +665,23 @@ public sealed class WsMonitorAgent
             }
         }
 
-        var screenshot = ScreenshotHelper.TryCapturePrimaryScreen(imageFormat, quality);
+        var screenshot = await TryCaptureScreenAsync(imageFormat, quality, token);
         if (!screenshot.Ok)
         {
+            await ManagerPipePublisher.TryPublishAsync(
+                "Service",
+                "ScreenShot",
+                $"scope=app, app={appName}, ok=false, error={screenshot.Error}",
+                token);
             await SendResponseAsync(ws, requestId, false, screenshot.Error ?? "capture app failed", token);
             return;
         }
+
+        await ManagerPipePublisher.TryPublishAsync(
+            "Service",
+            "ScreenShot",
+            $"scope=app, app={appName}, ok=true, width={screenshot.Width}, height={screenshot.Height}, contentType={screenshot.ContentType}",
+            token);
 
         await SendJsonAsync(ws, new
         {
@@ -642,6 +701,63 @@ public sealed class WsMonitorAgent
             },
             ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
         }, token);
+    }
+
+    private static async Task<ScreenshotCaptureResult> TryCaptureScreenAsync(string imageFormat, int quality, CancellationToken token)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(8));
+        try
+        {
+            var local = await Task.Run(
+                () => ScreenshotHelper.TryCapturePrimaryScreen(imageFormat, quality),
+                timeoutCts.Token);
+            if (local.Ok)
+            {
+                return local;
+            }
+
+            if (!ShouldTryManagerCapture(local.Error))
+            {
+                return local;
+            }
+
+            var manager = await ManagerScreenshotBridge.TryCaptureAsync(imageFormat, quality, token);
+            if (manager.Ok)
+            {
+                return manager;
+            }
+
+            return new ScreenshotCaptureResult
+            {
+                Ok = false,
+                Error = $"local capture failed: {local.Error}; manager fallback failed: {manager.Error}"
+            };
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            var manager = await ManagerScreenshotBridge.TryCaptureAsync(imageFormat, quality, token);
+            return manager.Ok
+                ? manager
+                : new ScreenshotCaptureResult
+                {
+                    Ok = false,
+                    Error = $"capture timeout and manager fallback failed: {manager.Error}"
+                };
+        }
+    }
+
+    private static bool ShouldTryManagerCapture(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return false;
+        }
+
+        return error.Contains("non-interactive", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("session 0", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("screen is not available", StringComparison.OrdinalIgnoreCase)
+               || error.Contains("capture timeout", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task PublishAppAlertsIfNeededAsync(ClientWebSocket ws, MonitorSnapshot snapshot, CancellationToken token)

@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.Runtime.Versioning;
 
 namespace SMMonitor.Agent.Service;
@@ -51,6 +52,25 @@ public static class ScreenshotHelper
             if (OperatingSystem.IsWindows() == false)
             {
                 return new ScreenshotCaptureResult { Ok = false, Error = "screenshot only supported on windows" };
+            }
+
+            if (!System.Windows.Forms.SystemInformation.UserInteractive || !Environment.UserInteractive)
+            {
+                return new ScreenshotCaptureResult
+                {
+                    Ok = false,
+                    Error = "windows session is non-interactive; run agent in logged-in desktop session"
+                };
+            }
+
+            var sessionId = Process.GetCurrentProcess().SessionId;
+            if (sessionId <= 0)
+            {
+                return new ScreenshotCaptureResult
+                {
+                    Ok = false,
+                    Error = "agent is running in session 0 service context; screen capture is unavailable"
+                };
             }
 
             var bounds = System.Windows.Forms.Screen.PrimaryScreen?.Bounds;
