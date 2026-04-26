@@ -38,6 +38,7 @@ $prefix = (string)$config['key_prefix'];
  */
 $clientFdMap = []; // clientId => fd
 $fdClientMap = []; // fd => clientId
+$browserSubs = []; // fd => ['clientId'=>..., 'appName'=>..., 'subscribedAt'=>ts]
 
 function redis_conn(array $config): Redis
 {
@@ -112,6 +113,32 @@ function request_json_body(Request $request): array
 
     $data = json_decode($raw, true);
     return is_array($data) ? $data : [];
+}
+
+function is_admin_token_valid_for_ws(array $config, string $token): bool
+{
+    $adminToken = (string)($config['admin_token'] ?? '');
+    if ($adminToken === '') {
+        return true;
+    }
+    return hash_equals($adminToken, $token);
+}
+
+function try_extract_app_name_from_pipe_content(string $content): string
+{
+    $decoded = json_decode($content, true);
+    if (!is_array($decoded)) {
+        return '';
+    }
+
+    foreach (['app', 'appName', 'name', 'source'] as $key) {
+        $value = trim((string)($decoded[$key] ?? ''));
+        if ($value !== '') {
+            return $value;
+        }
+    }
+
+    return '';
 }
 
 function normalize_payload_client(array $data): array
@@ -318,7 +345,7 @@ $server->on('Open', function (Server $server, Request $request): void {
     echo '[' . date('Y-m-d H:i:s') . "] open fd={$request->fd}\n";
 });
 
-$server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) use (&$clientFdMap, &$fdClientMap, $config, $prefix): void {
+$server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) use (&$clientFdMap, &$fdClientMap, &$browserSubs, $config, $prefix): void {
     $data = json_decode($frame->data, true);
     if (!is_array($data)) {
         return;
@@ -326,6 +353,34 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
 
     $type = (string)($data['type'] ?? '');
     $clientToken = (string)($config['client_token'] ?? '');
+
+    if ($type === 'browser_subscribe') {
+        $adminToken = (string)($data['adminToken'] ?? '');
+        if (!is_admin_token_valid_for_ws($config, $adminToken)) {
+            $server->push($frame->fd, json_encode_cn([
+                'type' => 'browser_subscribe_ack',
+                'ok' => false,
+                'message' => 'admin token invalid',
+                'ts' => now_ts(),
+            ]));
+            return;
+        }
+
+        $browserSubs[$frame->fd] = [
+            'clientId' => trim((string)($data['clientId'] ?? '')),
+            'appName' => trim((string)($data['appName'] ?? '')),
+            'subscribedAt' => now_ts(),
+        ];
+
+        $server->push($frame->fd, json_encode_cn([
+            'type' => 'browser_subscribe_ack',
+            'ok' => true,
+            'clientId' => $browserSubs[$frame->fd]['clientId'],
+            'appName' => $browserSubs[$frame->fd]['appName'],
+            'ts' => now_ts(),
+        ]));
+        return;
+    }
 
     try {
         $redis = redis_conn($config);
@@ -415,6 +470,10 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
         }
 
         $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
+        $appName = trim((string)($payload['appName'] ?? ''));
+        if ($appName === '') {
+            $appName = try_extract_app_name_from_pipe_content((string)($payload['content'] ?? ''));
+        }
         $row = [
             'type' => 'app_pipe_message',
             'clientId' => $clientId,
@@ -422,6 +481,7 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
             'payload' => [
                 'pipeName' => (string)($payload['pipeName'] ?? ''),
                 'content' => (string)($payload['content'] ?? ''),
+                'appName' => $appName,
             ],
         ];
 
@@ -441,6 +501,26 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
         $redis->lPush($prefix . 'pipe_messages', json_encode_cn($row));
         $redis->lTrim($prefix . 'pipe_messages', 0, 499);
         $redis->expire($prefix . 'pipe_messages', (int)($config['request_ttl_seconds'] ?? 300));
+
+        foreach ($browserSubs as $fd => $sub) {
+            if (!$server->isEstablished((int)$fd)) {
+                unset($browserSubs[$fd]);
+                continue;
+            }
+            $subClient = trim((string)($sub['clientId'] ?? ''));
+            $subApp = trim((string)($sub['appName'] ?? ''));
+            if ($subClient !== '' && $subClient !== $clientId) {
+                continue;
+            }
+            if ($subApp !== '' && strcasecmp($subApp, $appName) !== 0) {
+                continue;
+            }
+            $server->push((int)$fd, json_encode_cn([
+                'type' => 'pipe_message',
+                'data' => $row,
+                'ts' => now_ts(),
+            ]));
+        }
 
         echo '[' . date('H:i:s') . "] app_pipe_message {$clientId}\n";
         return;
@@ -478,7 +558,8 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
     }
 });
 
-$server->on('Close', function (Server $server, int $fd) use (&$clientFdMap, &$fdClientMap): void {
+$server->on('Close', function (Server $server, int $fd) use (&$clientFdMap, &$fdClientMap, &$browserSubs): void {
+    unset($browserSubs[$fd]);
     if (isset($fdClientMap[$fd])) {
         $clientId = $fdClientMap[$fd];
         unset($fdClientMap[$fd], $clientFdMap[$clientId]);

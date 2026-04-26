@@ -312,6 +312,17 @@
                 <div style="margin-top:4px;">
                   <el-button size="small" type="success" plain @click="quickStartMonitoredApp(row, app)">启动</el-button>
                   <el-button size="small" type="danger" plain @click="quickStopMonitoredApp(row, app)">停止</el-button>
+                  <el-dropdown @command="(cmd) => onMonitoredAppAction(row, app, cmd)">
+                    <el-button size="small" plain>
+                      操作
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="logs">日志</el-dropdown-item>
+                        <el-dropdown-item command="screenshot">截屏</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
                 </div>
               </div>
             </div>
@@ -556,6 +567,35 @@
       </template>
     </el-dialog>
 
+    <!-- 应用实时日志弹窗 -->
+    <el-dialog
+      v-model="appLogDialogVisible"
+      width="980px"
+      :title="`应用日志 - ${appLogClientId || ''} / ${appLogAppName || ''}`"
+      @close="onAppLogDialogClose"
+    >
+      <el-form label-width="110px">
+        <el-form-item label="实时日志">
+          <el-switch v-model="appLogRealtime" @change="onAppLogRealtimeToggle"></el-switch>
+          <span class="inline-tip" style="margin-left: 12px;">{{ appLogStatus || '未连接' }}</span>
+        </el-form-item>
+
+        <el-form-item label="日志输出">
+          <div class="response-box" style="height: 360px; overflow: auto;">
+            <div v-for="(line, idx) in appLogItems" :key="idx">{{ line }}</div>
+            <div v-if="!appLogItems.length" class="muted">暂无日志</div>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="appLogItems = []">清空</el-button>
+          <el-button @click="appLogDialogVisible = false">关闭</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <!-- 命令弹窗 -->
     <el-dialog
       v-model="commandDialogVisible"
@@ -694,12 +734,19 @@
           detailDialogVisible: false,
           settingDialogVisible: false,
           commDialogVisible: false,
+          appLogDialogVisible: false,
           commandDialogVisible: false,
           currentClient: null,
 
           commForm: { text: '' },
           commResultText: '',
           sending: false,
+          appLogClientId: '',
+          appLogAppName: '',
+          appLogRealtime: false,
+          appLogStatus: '',
+          appLogItems: [],
+          appLogWs: null,
 
           settingLoading: false,
           settingResultText: '',
@@ -778,6 +825,7 @@
         if (this.asyncPollTimer) clearInterval(this.asyncPollTimer)
         this.clearPollTimer()
         this.clearImagePreview()
+        this.closeAppLogSocket()
       },
 
       methods: {
@@ -1222,6 +1270,111 @@
             }
           } catch (err) {
             ElMessage.error(err.message || `停止失败：${app.name}`)
+          }
+        },
+
+        onMonitoredAppAction(row, app, command) {
+          if (command === 'logs') {
+            this.openAppLogDialog(row, app)
+            return
+          }
+          if (command === 'screenshot') {
+            this.openCommandDialog(row, 'app_screenshot')
+            this.$nextTick(() => {
+              this.commandForm.appScreenshot.name = app?.name || ''
+            })
+          }
+        },
+
+        openAppLogDialog(row, app) {
+          this.appLogClientId = row?.clientId || ''
+          this.appLogAppName = app?.name || ''
+          this.appLogDialogVisible = true
+          this.appLogRealtime = true
+          this.appLogStatus = '连接中...'
+          this.appLogItems = []
+          this.connectAppLogSocket()
+        },
+
+        onAppLogDialogClose() {
+          this.appLogRealtime = false
+          this.closeAppLogSocket()
+        },
+
+        onAppLogRealtimeToggle(value) {
+          if (value) {
+            this.connectAppLogSocket()
+          } else {
+            this.closeAppLogSocket()
+            this.appLogStatus = '已关闭'
+          }
+        },
+
+        appendAppLogLine(line) {
+          this.appLogItems.push(line)
+          if (this.appLogItems.length > 1000) {
+            this.appLogItems.splice(0, this.appLogItems.length - 1000)
+          }
+        },
+
+        closeAppLogSocket() {
+          if (this.appLogWs) {
+            try { this.appLogWs.close() } catch (_) {}
+            this.appLogWs = null
+          }
+        },
+
+        connectAppLogSocket() {
+          if (!this.appLogDialogVisible || !this.appLogRealtime || !this.appLogClientId) {
+            return
+          }
+          this.closeAppLogSocket()
+
+          const wsBase = this.apiBase.replace(/^http/i, 'ws')
+          const ws = new WebSocket(wsBase)
+          this.appLogWs = ws
+          ws.onopen = () => {
+            this.appLogStatus = '已连接'
+            ws.send(JSON.stringify({
+              type: 'browser_subscribe',
+              adminToken: this.adminToken || '',
+              clientId: this.appLogClientId,
+              appName: this.appLogAppName
+            }))
+          }
+
+          ws.onmessage = (event) => {
+            try {
+              const msg = JSON.parse(event.data)
+              if (msg.type === 'browser_subscribe_ack') {
+                if (!msg.ok) {
+                  this.appLogStatus = msg.message || '订阅失败'
+                }
+                return
+              }
+              if (msg.type !== 'pipe_message') return
+              const row = msg.data || {}
+              const content = row?.payload?.content || ''
+              const appName = row?.payload?.appName || ''
+              if (this.appLogAppName && appName && this.appLogAppName.toLowerCase() !== String(appName).toLowerCase()) {
+                return
+              }
+              const ts = this.formatTime(row.ts || msg.ts || 0)
+              this.appendAppLogLine(`[${ts}] ${content}`)
+            } catch (e) {
+              // ignore invalid frame
+            }
+          }
+
+          ws.onerror = () => {
+            this.appLogStatus = '连接异常'
+          }
+
+          ws.onclose = () => {
+            if (this.appLogRealtime && this.appLogDialogVisible) {
+              this.appLogStatus = '已断开，重连中...'
+              setTimeout(() => this.connectAppLogSocket(), 1200)
+            }
           }
         },
 
