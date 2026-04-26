@@ -13,6 +13,7 @@ public sealed class WsMonitorAgent
     private readonly ILogger _logger;
     private readonly ResourceCollector _collector = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly Dictionary<string, bool> _appRunningState = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -70,7 +71,7 @@ public sealed class WsMonitorAgent
         {
             try
             {
-                var snapshot = _collector.Collect(_settings.Version);
+                var snapshot = _collector.Collect(_settings.Version, _settings.MonitoredApps);
                 var diskMax = snapshot.Disks.Count > 0 ? snapshot.Disks.Max(x => x.UsedPercent) : 0;
 
                 var msg = new
@@ -83,6 +84,7 @@ public sealed class WsMonitorAgent
                 };
 
                 await SendJsonAsync(ws, msg, token);
+                await PublishAppAlertsIfNeededAsync(ws, snapshot, token);
 
                 AgentConfigStore.SaveStatus(new AgentStatus
                 {
@@ -221,6 +223,18 @@ public sealed class WsMonitorAgent
                     await HandleRebootAsync(ws, requestId, root, token);
                     break;
 
+                case "app_status":
+                    await HandleAppStatusAsync(ws, requestId, token);
+                    break;
+
+                case "screen_screenshot":
+                    await HandleScreenScreenshotAsync(ws, requestId, root, token);
+                    break;
+
+                case "app_screenshot":
+                    await HandleAppScreenshotAsync(ws, requestId, root, token);
+                    break;
+
                 default:
                     await SendResponseAsync(ws, requestId, false, $"unknown action: {action}", token);
                     break;
@@ -229,6 +243,163 @@ public sealed class WsMonitorAgent
         catch (Exception ex)
         {
             _logger.LogError(ex, "Handle server message failed. Raw={Json}", json);
+        }
+    }
+
+    private async Task HandleAppStatusAsync(ClientWebSocket ws, string requestId, CancellationToken token)
+    {
+        var statuses = _collector.Collect(_settings.Version, _settings.MonitoredApps).MonitoredApps;
+
+        await SendJsonAsync(ws, new
+        {
+            type = "response",
+            requestId,
+            clientId = _settings.ClientId,
+            ok = true,
+            msg = "app status",
+            data = new
+            {
+                monitoredApps = statuses
+            },
+            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        }, token);
+    }
+
+    private async Task HandleScreenScreenshotAsync(ClientWebSocket ws, string requestId, JsonElement root, CancellationToken token)
+    {
+        var imageFormat = "jpeg";
+        var quality = 70;
+
+        if (root.TryGetProperty("payload", out var payload))
+        {
+            imageFormat = payload.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg";
+            if (payload.TryGetProperty("quality", out var q) && q.TryGetInt32(out var qv))
+            {
+                quality = Math.Clamp(qv, 30, 100);
+            }
+        }
+
+        var screenshot = ScreenshotHelper.TryCapturePrimaryScreen(imageFormat, quality);
+        if (!screenshot.Ok)
+        {
+            await SendResponseAsync(ws, requestId, false, screenshot.Error ?? "capture screen failed", token);
+            return;
+        }
+
+        await SendJsonAsync(ws, new
+        {
+            type = "response",
+            requestId,
+            clientId = _settings.ClientId,
+            ok = true,
+            msg = "screen screenshot",
+            data = screenshot.ToData(),
+            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        }, token);
+    }
+
+    private async Task HandleAppScreenshotAsync(ClientWebSocket ws, string requestId, JsonElement root, CancellationToken token)
+    {
+        var appName = "";
+        var imageFormat = "jpeg";
+        var quality = 70;
+
+        if (root.TryGetProperty("payload", out var payload))
+        {
+            appName = payload.TryGetProperty("name", out var name) ? (name.GetString() ?? "") : "";
+            imageFormat = payload.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg";
+
+            if (payload.TryGetProperty("quality", out var q) && q.TryGetInt32(out var qv))
+            {
+                quality = Math.Clamp(qv, 30, 100);
+            }
+        }
+
+        var screenshot = ScreenshotHelper.TryCapturePrimaryScreen(imageFormat, quality);
+        if (!screenshot.Ok)
+        {
+            await SendResponseAsync(ws, requestId, false, screenshot.Error ?? "capture app failed", token);
+            return;
+        }
+
+        await SendJsonAsync(ws, new
+        {
+            type = "response",
+            requestId,
+            clientId = _settings.ClientId,
+            ok = true,
+            msg = "app screenshot",
+            data = new
+            {
+                appName,
+                captureMode = "screen-fallback",
+                imageBase64 = screenshot.ImageBase64,
+                contentType = screenshot.ContentType,
+                width = screenshot.Width,
+                height = screenshot.Height
+            },
+            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        }, token);
+    }
+
+    private async Task PublishAppAlertsIfNeededAsync(ClientWebSocket ws, MonitorSnapshot snapshot, CancellationToken token)
+    {
+        foreach (var app in snapshot.MonitoredApps)
+        {
+            var current = app.IsRunning;
+            if (!_appRunningState.TryGetValue(app.Name, out var old))
+            {
+                _appRunningState[app.Name] = current;
+                continue;
+            }
+
+            if (old == current)
+            {
+                continue;
+            }
+
+            _appRunningState[app.Name] = current;
+
+            if (current)
+            {
+                await SendJsonAsync(ws, new
+                {
+                    type = "app_alert",
+                    level = "info",
+                    clientId = _settings.ClientId,
+                    token = _settings.Token,
+                    ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    payload = new
+                    {
+                        app = app.Name,
+                        status = "recovered",
+                        processCount = app.ProcessCount,
+                        message = $"monitored app recovered: {app.Name}"
+                    }
+                }, token);
+                continue;
+            }
+
+            var screenshot = _settings.AutoCaptureScreenshotOnAppFailure
+                ? ScreenshotHelper.TryCapturePrimaryScreen("jpeg", 60)
+                : ScreenshotCaptureResult.NotEnabled();
+
+            await SendJsonAsync(ws, new
+            {
+                type = "app_alert",
+                level = "critical",
+                clientId = _settings.ClientId,
+                token = _settings.Token,
+                ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                payload = new
+                {
+                    app = app.Name,
+                    status = "stopped",
+                    processCount = app.ProcessCount,
+                    message = $"monitored app stopped: {app.Name}",
+                    screenshot = screenshot.ToData()
+                }
+            }, token);
         }
     }
 

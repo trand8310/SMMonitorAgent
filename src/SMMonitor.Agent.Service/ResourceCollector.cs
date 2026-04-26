@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace SMMonitor.Agent.Service;
@@ -11,7 +12,7 @@ public sealed class ResourceCollector
     private ulong _lastUser;
     private bool _hasCpuSample;
 
-    public MonitorSnapshot Collect(string version)
+    public MonitorSnapshot Collect(string version, IReadOnlyCollection<string>? monitoredApps = null)
     {
         var mem = NativeMethods.GetMemoryInfo();
         var disks = GetDisks();
@@ -27,7 +28,8 @@ public sealed class ResourceCollector
             MemoryAvailableMb = mem.AvailableMb,
             ProcessUptimeSeconds = (long)(DateTime.Now - _processStartTime).TotalSeconds,
             BootTime = DateTime.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),
-            Disks = disks
+            Disks = disks,
+            MonitoredApps = GetMonitoredAppStatuses(monitoredApps)
         };
     }
 
@@ -102,6 +104,80 @@ public sealed class ResourceCollector
 
         return list;
     }
+
+    private static List<MonitoredAppStatus> GetMonitoredAppStatuses(IReadOnlyCollection<string>? monitoredApps)
+    {
+        if (monitoredApps == null || monitoredApps.Count == 0)
+        {
+            return new List<MonitoredAppStatus>();
+        }
+
+        var list = new List<MonitoredAppStatus>();
+
+        foreach (var app in monitoredApps
+                     .Where(x => !string.IsNullOrWhiteSpace(x))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var processName = NormalizeProcessName(app);
+            Process[] matches;
+
+            try
+            {
+                matches = Process.GetProcessesByName(processName);
+            }
+            catch
+            {
+                matches = Array.Empty<Process>();
+            }
+
+            var cpuSeconds = 0d;
+            var startedAt = DateTime.MinValue;
+
+            foreach (var p in matches)
+            {
+                try
+                {
+                    cpuSeconds += p.TotalProcessorTime.TotalSeconds;
+
+                    var st = p.StartTime;
+                    if (startedAt == DateTime.MinValue || st < startedAt)
+                    {
+                        startedAt = st;
+                    }
+                }
+                catch
+                {
+                    // 进程瞬时退出或权限不足时忽略
+                }
+                finally
+                {
+                    p.Dispose();
+                }
+            }
+
+            list.Add(new MonitoredAppStatus
+            {
+                Name = processName,
+                IsRunning = matches.Length > 0,
+                ProcessCount = matches.Length,
+                OldestStartTime = startedAt == DateTime.MinValue ? null : startedAt,
+                TotalCpuSeconds = Math.Round(cpuSeconds, 2)
+            });
+        }
+
+        return list;
+    }
+
+    private static string NormalizeProcessName(string raw)
+    {
+        var value = raw.Trim();
+        if (value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            value = value[..^4];
+        }
+
+        return value;
+    }
 }
 
 public sealed class MonitorSnapshot
@@ -116,6 +192,7 @@ public sealed class MonitorSnapshot
     public long ProcessUptimeSeconds { get; set; }
     public DateTime BootTime { get; set; }
     public List<DiskInfo> Disks { get; set; } = new();
+    public List<MonitoredAppStatus> MonitoredApps { get; set; } = new();
 }
 
 public sealed class DiskInfo
@@ -124,6 +201,15 @@ public sealed class DiskInfo
     public double TotalGb { get; set; }
     public double FreeGb { get; set; }
     public double UsedPercent { get; set; }
+}
+
+public sealed class MonitoredAppStatus
+{
+    public string Name { get; set; } = "";
+    public bool IsRunning { get; set; }
+    public int ProcessCount { get; set; }
+    public DateTime? OldestStartTime { get; set; }
+    public double TotalCpuSeconds { get; set; }
 }
 
 public static class NativeMethods

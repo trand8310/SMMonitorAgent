@@ -292,6 +292,32 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="应用监控" min-width="210">
+          <template #default="{ row }">
+            <div class="disk-list" v-if="getMonitoredApps(row).length">
+              <div v-for="app in getMonitoredApps(row)" :key="app.name">
+                <span :class="app.isRunning ? 'metric-ok' : 'metric-danger'">
+                  {{ app.name }} {{ app.isRunning ? '运行中' : '已停止' }}
+                </span>
+                <span class="muted">({{ app.processCount || 0 }}进程)</span>
+              </div>
+            </div>
+            <div v-else class="muted">未配置</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="最近告警" min-width="180">
+          <template #default="{ row }">
+            <template v-if="row.lastAppAlert">
+              <div :class="row.lastAppAlert.level === 'critical' ? 'danger-text' : 'metric-warn'">
+                {{ row.lastAppAlert?.payload?.app || '-' }} {{ row.lastAppAlert?.payload?.status || '' }}
+              </div>
+              <div class="muted">{{ formatTime(row.lastAppAlert.ts) }}</div>
+            </template>
+            <div v-else class="muted">-</div>
+          </template>
+        </el-table-column>
+
         <el-table-column label="最后心跳" min-width="170">
           <template #default="{ row }">
             <div>{{ formatTime(row.lastHeartbeat) }}</div>
@@ -356,6 +382,13 @@
       <div class="result-card">
         <div style="margin-bottom:8px;font-weight:600;">原始数据</div>
         <div class="response-box">{{ prettyJson(currentClient || {}) }}</div>
+      </div>
+
+      <div class="result-card" v-if="currentClient?.lastAppAlert?.payload?.screenshot?.fileUrl">
+        <div style="margin-bottom:8px;font-weight:600;">最近异常截图</div>
+        <div class="preview-image-wrap">
+          <img class="preview-image" :src="`${apiBase}${currentClient.lastAppAlert.payload.screenshot.fileUrl}`" alt="最近异常截图" />
+        </div>
       </div>
     </el-dialog>
 
@@ -652,6 +685,11 @@
         getDisks(row) {
           const disks = row?.disks || row?.payload?.disks || row?.payload?.Disks || []
           return Array.isArray(disks) ? disks : []
+        },
+
+        getMonitoredApps(row) {
+          const apps = row?.monitoredApps || row?.payload?.monitoredApps || row?.payload?.MonitoredApps || []
+          return Array.isArray(apps) ? apps : []
         },
 
         maxDiskUsed(row) {
