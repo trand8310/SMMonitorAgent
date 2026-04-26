@@ -14,6 +14,9 @@ public sealed class WsMonitorAgent
     private readonly ResourceCollector _collector = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly Dictionary<string, bool> _appRunningState = new(StringComparer.OrdinalIgnoreCase);
+    private AppPipeForwarder? _pipeForwarder;
+    private volatile bool _pipeLivePushEnabled;
+    private volatile string _pipeLivePushApp = "";
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -50,8 +53,9 @@ public sealed class WsMonitorAgent
 
         var receiveTask = ReceiveLoopAsync(ws, token);
         var uploadTask = UploadLoopAsync(ws, token);
+        var pipeTask = PipeForwardLoopAsync(ws, token);
 
-        await Task.WhenAny(receiveTask, uploadTask);
+        await Task.WhenAny(receiveTask, uploadTask, pipeTask);
 
         try
         {
@@ -121,6 +125,74 @@ public sealed class WsMonitorAgent
             }
 
             await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, _settings.UploadIntervalSeconds)), token);
+        }
+    }
+
+    private async Task PipeForwardLoopAsync(ClientWebSocket ws, CancellationToken token)
+    {
+        if (!_settings.EnablePipeForward || string.IsNullOrWhiteSpace(_settings.AppPipeName))
+        {
+            return;
+        }
+
+        _pipeForwarder ??= new AppPipeForwarder(_settings.AppPipeName, _logger);
+
+        await _pipeForwarder.RunAsync(async message =>
+        {
+            if (ws.State != WebSocketState.Open)
+            {
+                return;
+            }
+
+            if (_pipeLivePushEnabled == false)
+            {
+                return;
+            }
+
+            if (IsPipeMessageAllowed(message.Content) == false)
+            {
+                return;
+            }
+
+            await SendJsonAsync(ws, new
+            {
+                type = "app_pipe_message",
+                clientId = _settings.ClientId,
+                token = _settings.Token,
+                ts = message.Timestamp,
+                payload = new
+                {
+                    pipeName = message.PipeName,
+                    content = message.Content
+                }
+            }, token);
+        }, token);
+    }
+
+    private bool IsPipeMessageAllowed(string content)
+    {
+        if (string.IsNullOrWhiteSpace(_pipeLivePushApp))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            var root = doc.RootElement;
+            var app = root.TryGetProperty("app", out var appEl) ? appEl.GetString() :
+                root.TryGetProperty("appName", out var appNameEl) ? appNameEl.GetString() : "";
+
+            if (string.IsNullOrWhiteSpace(app))
+            {
+                return false;
+            }
+
+            return string.Equals(NormalizeProcessName(app), _pipeLivePushApp, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -211,6 +283,10 @@ public sealed class WsMonitorAgent
                             _settings.UploadIntervalSeconds,
                             _settings.EnableUpload,
                             _settings.EnableRemoteReboot,
+                            _settings.EnablePipeForward,
+                            _settings.AppPipeName,
+                            PipeLivePushEnabled = _pipeLivePushEnabled,
+                            PipeLivePushApp = _pipeLivePushApp,
                             _settings.CpuAlertPercent,
                             _settings.MemoryAlertPercent,
                             _settings.DiskAlertPercent
@@ -233,6 +309,10 @@ public sealed class WsMonitorAgent
 
                 case "app_screenshot":
                     await HandleAppScreenshotAsync(ws, requestId, root, token);
+                    break;
+
+                case "command":
+                    await HandleCommandAsync(ws, requestId, root, token);
                     break;
 
                 default:
@@ -259,10 +339,222 @@ public sealed class WsMonitorAgent
             msg = "app status",
             data = new
             {
-                monitoredApps = statuses
+                monitoredApps = statuses,
+                monitoredAppProfiles = _settings.MonitoredAppProfiles
             },
             ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
         }, token);
+    }
+
+    private async Task HandleCommandAsync(ClientWebSocket ws, string requestId, JsonElement root, CancellationToken token)
+    {
+        var command = "";
+        JsonElement args = default;
+
+        if (root.TryGetProperty("payload", out var payload))
+        {
+            command = payload.TryGetProperty("command", out var c) ? (c.GetString() ?? "") : "";
+            args = payload.TryGetProperty("args", out var a) ? a : default;
+        }
+
+        switch (command.ToLowerInvariant())
+        {
+            case "app_start":
+                await HandleAppStartAsync(ws, requestId, args, token);
+                return;
+            case "app_stop":
+                await HandleAppStopAsync(ws, requestId, args, token);
+                return;
+            case "app_screenshot":
+                await HandleAppScreenshotAsync(ws, requestId, root, token);
+                return;
+            case "screen_screenshot":
+                await HandleScreenScreenshotAsync(ws, requestId, root, token);
+                return;
+            case "pipe_live_push":
+                await HandlePipeLivePushAsync(ws, requestId, args, token);
+                return;
+            default:
+                await SendResponseAsync(ws, requestId, false, $"unknown command: {command}", token);
+                return;
+        }
+    }
+
+    private async Task HandlePipeLivePushAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
+    {
+        var enabled = args.ValueKind == JsonValueKind.Object &&
+                      args.TryGetProperty("enabled", out var enabledEl) &&
+                      enabledEl.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                      enabledEl.GetBoolean();
+
+        var appName = args.ValueKind == JsonValueKind.Object &&
+                      args.TryGetProperty("appName", out var appNameEl)
+            ? NormalizeProcessName(appNameEl.GetString() ?? "")
+            : "";
+
+        _pipeLivePushEnabled = enabled;
+        _pipeLivePushApp = appName;
+
+        await SendJsonAsync(ws, new
+        {
+            type = "response",
+            requestId,
+            clientId = _settings.ClientId,
+            ok = true,
+            msg = enabled ? "pipe live push enabled" : "pipe live push disabled",
+            data = new
+            {
+                enabled = _pipeLivePushEnabled,
+                appName = _pipeLivePushApp
+            },
+            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        }, token);
+    }
+
+    private async Task HandleAppStartAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
+    {
+        var name = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
+        var filePath = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("filePath", out var p) ? (p.GetString() ?? "") : "";
+        var appArgs = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("arguments", out var a) ? (a.GetString() ?? "") : "";
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            var profile = FindProfileByName(name);
+            if (profile != null)
+            {
+                filePath = profile.FilePath;
+                if (string.IsNullOrWhiteSpace(appArgs))
+                {
+                    appArgs = profile.Arguments;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            await SendResponseAsync(ws, requestId, false, "filePath required", token);
+            return;
+        }
+
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = filePath,
+                Arguments = appArgs,
+                WorkingDirectory = Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory,
+                UseShellExecute = true
+            };
+
+            var p = Process.Start(info);
+            await SendJsonAsync(ws, new
+            {
+                type = "response",
+                requestId,
+                clientId = _settings.ClientId,
+                ok = p != null,
+                msg = p != null ? "app started" : "start failed",
+                data = new
+                {
+                    name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(filePath) : name,
+                    filePath,
+                    arguments = appArgs,
+                    processId = p?.Id ?? 0
+                },
+                ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            }, token);
+        }
+        catch (Exception ex)
+        {
+            await SendResponseAsync(ws, requestId, false, ex.Message, token);
+        }
+    }
+
+    private async Task HandleAppStopAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
+    {
+        var name = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
+        var processId = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("processId", out var p) && p.TryGetInt32(out var pid) ? pid : 0;
+
+        var killed = 0;
+        var errors = new List<string>();
+
+        if (processId > 0)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById(processId);
+                proc.Kill(true);
+                killed++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex.Message);
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                await SendResponseAsync(ws, requestId, false, "name or processId required", token);
+                return;
+            }
+
+            var processName = NormalizeProcessName(name);
+            foreach (var proc in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    proc.Kill(true);
+                    killed++;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(ex.Message);
+                }
+                finally
+                {
+                    proc.Dispose();
+                }
+            }
+        }
+
+        await SendJsonAsync(ws, new
+        {
+            type = "response",
+            requestId,
+            clientId = _settings.ClientId,
+            ok = killed > 0 && errors.Count == 0,
+            msg = killed > 0 ? $"stopped {killed} process(es)" : "no process stopped",
+            data = new
+            {
+                name,
+                processId,
+                killedCount = killed,
+                errors
+            },
+            ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        }, token);
+    }
+
+    private MonitoredAppProfile? FindProfileByName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var normalized = NormalizeProcessName(name);
+        return _settings.MonitoredAppProfiles.FirstOrDefault(x => string.Equals(x.Name, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeProcessName(string raw)
+    {
+        var value = raw.Trim();
+        if (value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            value = value[..^4];
+        }
+        return value;
     }
 
     private async Task HandleScreenScreenshotAsync(ClientWebSocket ws, string requestId, JsonElement root, CancellationToken token)

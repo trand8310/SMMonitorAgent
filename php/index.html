@@ -299,7 +299,10 @@
                 <span :class="app.isRunning ? 'metric-ok' : 'metric-danger'">
                   {{ app.name }} {{ app.isRunning ? '运行中' : '已停止' }}
                 </span>
-                <span class="muted">({{ app.processCount || 0 }}进程)</span>
+                <span class="muted">({{ app.processCount || 0 }}进程 / {{ app.threadCount || 0 }}线程)</span>
+                <div class="muted">
+                  CPU {{ formatPercent(app.cpuPercent) }} / 内存 {{ formatMb(app.memoryUsedMb) }}
+                </div>
               </div>
             </div>
             <div v-else class="muted">未配置</div>
@@ -313,6 +316,19 @@
                 {{ row.lastAppAlert?.payload?.app || '-' }} {{ row.lastAppAlert?.payload?.status || '' }}
               </div>
               <div class="muted">{{ formatTime(row.lastAppAlert.ts) }}</div>
+            </template>
+            <div v-else class="muted">-</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="实时管道消息" min-width="240">
+          <template #default="{ row }">
+            <template v-if="row.lastPipeMessage">
+              <div class="muted">{{ row.lastPipeMessage?.payload?.pipeName || '-' }}</div>
+              <div style="font-family: Consolas, Monaco, monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                {{ row.lastPipeMessage?.payload?.content || '-' }}
+              </div>
+              <div class="muted">{{ formatTime(row.lastPipeMessage.ts) }}</div>
             </template>
             <div v-else class="muted">-</div>
           </template>
@@ -379,9 +395,35 @@
         <div class="detail-item"><div class="detail-label">最后心跳</div><div class="detail-value">{{ formatTime(currentClient.lastHeartbeat) }}</div></div>
       </div>
 
+      <div class="result-card" v-if="currentClient">
+        <div style="margin-bottom:8px;font-weight:600;">实时推送控制（默认关闭，防消息风暴）</div>
+        <el-form inline>
+          <el-form-item label="监控应用">
+            <el-select v-model="livePushAppName" placeholder="全部应用" clearable style="width: 220px">
+              <el-option v-for="app in getMonitoredApps(currentClient)" :key="app.name" :label="app.name" :value="app.name"></el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="实时推送">
+            <el-switch v-model="livePushEnabled" active-text="开启" inactive-text="关闭"></el-switch>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" size="small" :loading="livePushLoading" @click="applyPipeLivePush">应用</el-button>
+          </el-form-item>
+        </el-form>
+        <div class="inline-tip">{{ livePushResultText || '关闭时不会主动推送管道消息；开启后仅推送选中应用（或全部应用）消息。' }}</div>
+      </div>
+
       <div class="result-card">
         <div style="margin-bottom:8px;font-weight:600;">原始数据</div>
         <div class="response-box">{{ prettyJson(currentClient || {}) }}</div>
+      </div>
+
+      <div class="result-card" v-if="currentClient?.lastPipeMessage">
+        <div style="margin-bottom:8px;font-weight:600;">最近实时消息</div>
+        <div class="muted" style="margin-bottom:8px;">
+          管道：{{ currentClient?.lastPipeMessage?.payload?.pipeName || '-' }}，时间：{{ formatTime(currentClient?.lastPipeMessage?.ts) }}
+        </div>
+        <div class="response-box">{{ currentClient?.lastPipeMessage?.payload?.content || '' }}</div>
       </div>
 
       <div class="result-card" v-if="currentClient?.lastAppAlert?.payload?.screenshot?.fileUrl">
@@ -600,6 +642,10 @@
           commandResultText: '',
           imagePreviewUrl: '',
           imagePreviewMeta: '',
+          livePushEnabled: false,
+          livePushAppName: '',
+          livePushLoading: false,
+          livePushResultText: '',
           commandForm: {
             appStart: { name: '', filePath: '', arguments: '' },
             appStop: { name: '', processId: 0 }
@@ -680,6 +726,12 @@
           const n = Number(v)
           if (!Number.isFinite(n)) return '-'
           return `${n.toFixed(1)}GB`
+        },
+
+        formatMb(v) {
+          const n = Number(v)
+          if (!Number.isFinite(n)) return '-'
+          return `${n.toFixed(1)}MB`
         },
 
         getDisks(row) {
@@ -822,7 +874,54 @@
 
         openDetailDialog(row) {
           this.currentClient = row
+          this.livePushEnabled = false
+          this.livePushAppName = this.getMonitoredApps(row)?.[0]?.name || ''
+          this.livePushResultText = ''
           this.detailDialogVisible = true
+        },
+
+        async applyPipeLivePush() {
+          if (!this.currentClient?.clientId) {
+            ElMessage.warning('请先选择客户机')
+            return
+          }
+
+          this.livePushLoading = true
+          this.livePushResultText = '正在下发实时推送开关...'
+          try {
+            const { requestId, result } = await this.sendAndWait(
+              this.currentClient.clientId,
+              'command',
+              {
+                command: 'pipe_live_push',
+                args: {
+                  enabled: !!this.livePushEnabled,
+                  appName: (this.livePushAppName || '').trim()
+                }
+              },
+              (data) => {
+                this.livePushResultText = `requestId: ${requestId}\n${this.prettyJson(data)}`
+              }
+            )
+
+            if (!result) {
+              this.livePushResultText = `requestId: ${requestId}\n查询超时`
+              ElMessage.warning('下发超时')
+              return
+            }
+
+            this.livePushResultText = `requestId: ${requestId}\n${this.prettyJson(result)}`
+            if (result.success && result.status === 'done') {
+              ElMessage.success(this.livePushEnabled ? '已开启实时推送' : '已关闭实时推送')
+            } else {
+              ElMessage.warning('下发已返回，但状态异常')
+            }
+          } catch (err) {
+            this.livePushResultText = String(err)
+            ElMessage.error(err.message || '下发失败')
+          } finally {
+            this.livePushLoading = false
+          }
         },
 
         openSettingDialog(row) {

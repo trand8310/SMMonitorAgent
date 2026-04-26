@@ -19,7 +19,9 @@ public sealed class MainForm : Form
     private readonly CheckBox _chkEnableUpload = new();
     private readonly CheckBox _chkEnableReboot = new();
     private readonly CheckBox _chkAutoCaptureOnFailure = new();
+    private readonly CheckBox _chkEnablePipeForward = new();
     private readonly TextBox _txtMonitoredApps = new();
+    private readonly TextBox _txtPipeName = new();
 
     private readonly Label _lblServiceStatus = new();
     private readonly Label _lblWsStatus = new();
@@ -91,10 +93,30 @@ public sealed class MainForm : Form
 
         _txtMonitoredApps.Multiline = true;
         _txtMonitoredApps.ScrollBars = ScrollBars.Vertical;
-        AddRow(root, "监控应用(每行一个)", _txtMonitoredApps, 96);
+        AddRow(root, "监控应用(每行: 名称|路径|参数)", _txtMonitoredApps, 120);
 
         _chkAutoCaptureOnFailure.Text = "应用异常时自动截图并随告警上报";
         AddRow(root, "异常截图", _chkAutoCaptureOnFailure);
+
+        _chkEnablePipeForward.Text = "启用应用命名管道消息转发";
+        AddRow(root, "管道转发", _chkEnablePipeForward);
+
+        var pipePanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            WrapContents = false,
+            AutoSize = true
+        };
+        _txtPipeName.Width = 520;
+        _txtPipeName.PlaceholderText = "例如：SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d";
+        var btnGenPipe = MakeButton("生成GUID管道标识", 160);
+        btnGenPipe.Click += (_, _) =>
+        {
+            _txtPipeName.Text = "SMMONITOR_PIPE_" + Guid.NewGuid().ToString("N");
+        };
+        pipePanel.Controls.Add(_txtPipeName);
+        pipePanel.Controls.Add(btnGenPipe);
+        AddRow(root, "管道名称", pipePanel, 46);
 
         AddTitle(root, "操作");
 
@@ -217,8 +239,10 @@ public sealed class MainForm : Form
         _numCpu.Value = Math.Clamp(cfg.CpuAlertPercent, 1, 100);
         _numMemory.Value = Math.Clamp(cfg.MemoryAlertPercent, 1, 100);
         _numDisk.Value = Math.Clamp(cfg.DiskAlertPercent, 1, 100);
-        _txtMonitoredApps.Text = string.Join(Environment.NewLine, cfg.MonitoredApps ?? new List<string>());
+        _txtMonitoredApps.Text = string.Join(Environment.NewLine, BuildMonitoredAppLines(cfg));
         _chkAutoCaptureOnFailure.Checked = cfg.AutoCaptureScreenshotOnAppFailure;
+        _chkEnablePipeForward.Checked = cfg.EnablePipeForward;
+        _txtPipeName.Text = cfg.AppPipeName;
     }
 
     private void SaveConfig()
@@ -235,10 +259,11 @@ public sealed class MainForm : Form
             CpuAlertPercent = (int)_numCpu.Value,
             MemoryAlertPercent = (int)_numMemory.Value,
             DiskAlertPercent = (int)_numDisk.Value,
-            MonitoredApps = _txtMonitoredApps.Text
-                .Split(new[] { '\r', '\n', ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToList(),
-            AutoCaptureScreenshotOnAppFailure = _chkAutoCaptureOnFailure.Checked
+            MonitoredApps = ParseMonitoredNames(_txtMonitoredApps.Text),
+            MonitoredAppProfiles = ParseMonitoredProfiles(_txtMonitoredApps.Text),
+            AutoCaptureScreenshotOnAppFailure = _chkAutoCaptureOnFailure.Checked,
+            EnablePipeForward = _chkEnablePipeForward.Checked,
+            AppPipeName = _txtPipeName.Text.Trim()
         };
 
         AgentConfigStore.Save(cfg);
@@ -248,6 +273,81 @@ public sealed class MainForm : Form
             "提示",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
+    }
+
+    private static List<string> BuildMonitoredAppLines(AgentSettings cfg)
+    {
+        if (cfg.MonitoredAppProfiles is { Count: > 0 })
+        {
+            return cfg.MonitoredAppProfiles
+                .Select(x => $"{x.Name}|{x.FilePath}|{x.Arguments}".TrimEnd('|'))
+                .ToList();
+        }
+
+        return cfg.MonitoredApps?.ToList() ?? new List<string>();
+    }
+
+    private static List<string> ParseMonitoredNames(string raw)
+    {
+        return ParseMonitoredProfiles(raw)
+            .Select(x => x.Name)
+            .Concat((raw ?? "")
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(x => !x.Contains('|'))
+                .Select(NormalizeProcessName))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static List<MonitoredAppProfile> ParseMonitoredProfiles(string raw)
+    {
+        var list = new List<MonitoredAppProfile>();
+        foreach (var line in (raw ?? "")
+                     .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = line.Split('|');
+            if (parts.Length < 2)
+            {
+                continue;
+            }
+
+            var name = NormalizeProcessName(parts[0]);
+            var path = parts[1].Trim();
+            var args = parts.Length >= 3 ? parts[2].Trim() : "";
+
+            if (string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(path))
+            {
+                name = NormalizeProcessName(Path.GetFileNameWithoutExtension(path));
+            }
+
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            list.Add(new MonitoredAppProfile
+            {
+                Name = name,
+                FilePath = path,
+                Arguments = args
+            });
+        }
+
+        return list
+            .GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.First())
+            .ToList();
+    }
+
+    private static string NormalizeProcessName(string raw)
+    {
+        var value = (raw ?? "").Trim();
+        if (value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            value = value[..^4];
+        }
+        return value;
     }
 
     private void RefreshStatus()

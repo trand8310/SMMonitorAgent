@@ -377,6 +377,45 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
         return;
     }
 
+    if ($type === 'app_pipe_message') {
+        $clientId = (string)($data['clientId'] ?? ($fdClientMap[$frame->fd] ?? ''));
+        if ($clientId !== '') {
+            $clientFdMap[$clientId] = $frame->fd;
+            $fdClientMap[$frame->fd] = $clientId;
+        }
+
+        $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
+        $row = [
+            'type' => 'app_pipe_message',
+            'clientId' => $clientId,
+            'ts' => (int)($data['ts'] ?? now_ts()),
+            'payload' => [
+                'pipeName' => (string)($payload['pipeName'] ?? ''),
+                'content' => (string)($payload['content'] ?? ''),
+            ],
+        ];
+
+        if ($clientId !== '') {
+            $clientKey = $prefix . 'client:' . $clientId;
+            $clientRaw = $redis->get($clientKey);
+            if (is_string($clientRaw) && $clientRaw !== '') {
+                $clientData = json_decode($clientRaw, true);
+                if (is_array($clientData)) {
+                    $clientData['lastPipeMessage'] = $row;
+                    $ttl = (int)($config['client_ttl_seconds'] ?? 180);
+                    $redis->setex($clientKey, $ttl, json_encode_cn($clientData));
+                }
+            }
+        }
+
+        $redis->lPush($prefix . 'pipe_messages', json_encode_cn($row));
+        $redis->lTrim($prefix . 'pipe_messages', 0, 499);
+        $redis->expire($prefix . 'pipe_messages', (int)($config['request_ttl_seconds'] ?? 300));
+
+        echo '[' . date('H:i:s') . "] app_pipe_message {$clientId}\n";
+        return;
+    }
+
     if ($type === 'response') {
         $clientId = (string)($data['clientId'] ?? ($fdClientMap[$frame->fd] ?? ''));
         $requestId = (string)($data['requestId'] ?? '');

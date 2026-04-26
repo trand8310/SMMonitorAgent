@@ -22,9 +22,31 @@ public sealed class AgentSettings
     public List<string> MonitoredApps { get; set; } = new();
 
     /// <summary>
+    /// 监控应用完整定义，支持完整路径和默认启动参数。
+    /// </summary>
+    public List<MonitoredAppProfile> MonitoredAppProfiles { get; set; } = new();
+
+    /// <summary>
     /// 监控应用异常时，是否自动尝试采集屏幕截图并随告警一起上报。
     /// </summary>
     public bool AutoCaptureScreenshotOnAppFailure { get; set; } = false;
+
+    /// <summary>
+    /// 应用推送实时消息的命名管道标识（名称）。
+    /// </summary>
+    public string AppPipeName { get; set; } = "";
+
+    /// <summary>
+    /// 是否启用应用命名管道消息转发到管理后台。
+    /// </summary>
+    public bool EnablePipeForward { get; set; } = false;
+}
+
+public sealed class MonitoredAppProfile
+{
+    public string Name { get; set; } = "";
+    public string FilePath { get; set; } = "";
+    public string Arguments { get; set; } = "";
 }
 
 public sealed class AgentStatus
