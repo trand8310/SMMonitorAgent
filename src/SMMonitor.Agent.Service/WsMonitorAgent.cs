@@ -805,7 +805,17 @@ public sealed class WsMonitorAgent
             }
         }
 
-        var screenshot = await TryCaptureScreenAsync(imageFormat, quality, token);
+        var screenshot = await ManagerScreenshotBridge.TryCaptureAppAsync(appName, imageFormat, quality, token);
+        var captureMode = "app-window";
+        if (!screenshot.Ok)
+        {
+            var fallback = await TryCaptureScreenAsync(imageFormat, quality, token);
+            if (fallback.Ok)
+            {
+                screenshot = fallback;
+                captureMode = "screen-fallback";
+            }
+        }
         if (!screenshot.Ok)
         {
             await ManagerPipePublisher.TryPublishAsync(
@@ -833,7 +843,7 @@ public sealed class WsMonitorAgent
             data = new
             {
                 appName,
-                captureMode = "screen-fallback",
+                captureMode,
                 imageBase64 = screenshot.ImageBase64,
                 contentType = screenshot.ContentType,
                 width = screenshot.Width,

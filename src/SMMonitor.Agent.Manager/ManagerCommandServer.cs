@@ -2,6 +2,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO.Pipes;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using SMMonitor.Common;
@@ -114,6 +115,10 @@ public static class ManagerCommandServer
                 "capture_screen" => CapturePrimaryScreen(
                     root.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg",
                     root.TryGetProperty("quality", out var q) && q.TryGetInt32(out var qv) ? Math.Clamp(qv, 30, 100) : 70),
+                "capture_app" => CaptureAppWindow(
+                    root.TryGetProperty("appName", out var an) ? (an.GetString() ?? "") : "",
+                    root.TryGetProperty("imageFormat", out var af) ? (af.GetString() ?? "jpeg") : "jpeg",
+                    root.TryGetProperty("quality", out var aq) && aq.TryGetInt32(out var aqv) ? Math.Clamp(aqv, 30, 100) : 70),
                 "start_process" => StartProcessInManagerSession(
                     root.TryGetProperty("filePath", out var fp) ? (fp.GetString() ?? "") : "",
                     root.TryGetProperty("arguments", out var arg) ? (arg.GetString() ?? "") : ""),
@@ -202,6 +207,82 @@ public static class ManagerCommandServer
         };
     }
 
+    private static ManagerCaptureResponse CaptureAppWindow(string appName, string imageFormat, int jpegQuality)
+    {
+        var target = FindMainWindowProcess(appName);
+        if (target == null)
+        {
+            return ManagerCaptureResponse.Fail($"app window not found: {appName}");
+        }
+
+        if (target.MainWindowHandle == IntPtr.Zero || !GetWindowRect(target.MainWindowHandle, out var rect))
+        {
+            return ManagerCaptureResponse.Fail($"app main window unavailable: {appName}");
+        }
+
+        var width = Math.Max(0, rect.Right - rect.Left);
+        var height = Math.Max(0, rect.Bottom - rect.Top);
+        if (width <= 0 || height <= 0)
+        {
+            return ManagerCaptureResponse.Fail($"app window rect invalid: {appName}");
+        }
+
+        using var bitmap = new Bitmap(width, height);
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.CopyFromScreen(rect.Left, rect.Top, 0, 0, bitmap.Size);
+        }
+
+        using var ms = new MemoryStream();
+        var fmt = NormalizeFormat(imageFormat, out var contentType);
+        if (fmt.Guid == ImageFormat.Jpeg.Guid)
+        {
+            var encoder = ImageCodecInfo.GetImageEncoders().FirstOrDefault(x => x.FormatID == ImageFormat.Jpeg.Guid);
+            if (encoder != null)
+            {
+                using var ep = new EncoderParameters(1);
+                ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)Math.Clamp(jpegQuality, 30, 100));
+                bitmap.Save(ms, encoder, ep);
+            }
+            else
+            {
+                bitmap.Save(ms, fmt);
+            }
+        }
+        else
+        {
+            bitmap.Save(ms, fmt);
+        }
+
+        return new ManagerCaptureResponse
+        {
+            Ok = true,
+            Error = null,
+            ContentType = contentType,
+            ImageBase64 = Convert.ToBase64String(ms.ToArray()),
+            Width = bitmap.Width,
+            Height = bitmap.Height,
+            Message = $"captured app window: {target.ProcessName}"
+        };
+    }
+
+    private static Process? FindMainWindowProcess(string appName)
+    {
+        var normalized = (appName ?? "").Trim();
+        if (normalized.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[..^4];
+        }
+
+        if (normalized.Length == 0)
+        {
+            return null;
+        }
+
+        return Process.GetProcessesByName(normalized)
+            .FirstOrDefault(p => p.MainWindowHandle != IntPtr.Zero);
+    }
+
     private static ImageFormat NormalizeFormat(string input, out string contentType)
     {
         var fmt = (input ?? "jpeg").Trim().ToLowerInvariant();
@@ -219,6 +300,18 @@ public static class ManagerCommandServer
             return format;
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 }
 
 public sealed class ManagerCaptureResponse
