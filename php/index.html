@@ -120,6 +120,18 @@
       gap: 8px;
       flex-wrap: wrap;
     }
+    .app-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .app-actions .el-button + .el-button {
+      margin-left: 0 !important;
+    }
+    .app-actions .el-dropdown {
+      margin-left: 0 !important;
+    }
     .result-card {
       margin-top: 14px;
       border: 1px solid #ebeef5;
@@ -186,7 +198,7 @@
       <div class="toolbar">
         <el-input
           v-model="keyword"
-          placeholder="搜索主机IP / 机器名 / 分组"
+          placeholder="搜索主机IP"
           clearable
           style="width: 280px"
         ></el-input>
@@ -203,6 +215,12 @@
       </div>
     </div>
 
+    <el-tabs v-model="activePage" style="margin-bottom: 12px;">
+      <el-tab-pane label="主机监控" name="clients"></el-tab-pane>
+      <el-tab-pane label="实时日志" name="logs"></el-tab-pane>
+    </el-tabs>
+
+    <template v-if="activePage === 'clients'">
     <div class="summary-grid">
       <div class="summary-card">
         <div class="summary-title">客户端总数</div>
@@ -229,40 +247,23 @@
         stripe
         v-loading="loadingClients"
         style="width: 100%"
+        :default-sort="{ prop: 'lastHeartbeat', order: 'descending' }"
       >
-        <el-table-column label="状态" width="100" align="center">
+        <el-table-column label="状态" width="100" align="center" sortable :sort-method="sortByOnline">
           <template #default="{ row }">
             <span class="status-dot" :class="row.online ? 'status-online' : 'status-offline'"></span>
             <span>{{ row.online ? '在线' : '离线' }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="clientId" label="主机IP / ClientId" min-width="150">
+        <el-table-column prop="clientId" label="主机IP / ClientId" min-width="150" sortable>
           <template #default="{ row }">
             <div class="ip-text">{{ row.clientId || '-' }}</div>
             <div class="muted" v-if="row.localIp && row.localIp !== row.clientId">{{ row.localIp }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="机器名" min-width="150">
-          <template #default="{ row }">
-            <div>{{ row.machineName || '-' }}</div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="版本" min-width="100">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.version || '-' }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="分组" min-width="110">
-          <template #default="{ row }">
-            <div>{{ row.group || '-' }}</div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="CPU" width="105" align="center">
+        <el-table-column prop="cpu" label="CPU" width="105" align="center" sortable>
           <template #default="{ row }">
             <span class="metric" :class="metricClass(row.cpu, 80, 95)">
               {{ formatPercent(row.cpu) }}
@@ -270,7 +271,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="内存" width="105" align="center">
+        <el-table-column prop="memoryUsedPercent" label="内存" width="105" align="center" sortable>
           <template #default="{ row }">
             <span class="metric" :class="metricClass(row.memoryUsedPercent, 80, 90)">
               {{ formatPercent(row.memoryUsedPercent) }}
@@ -278,7 +279,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="磁盘" min-width="210">
+        <el-table-column label="磁盘" min-width="210" sortable :sort-method="sortByDiskUsed">
           <template #default="{ row }">
             <div class="disk-list" v-if="getDisks(row).length">
               <div v-for="d in getDisks(row)" :key="d.name">
@@ -292,25 +293,56 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="最后心跳" min-width="170">
+        <el-table-column label="应用监控" min-width="210">
+          <template #default="{ row }">
+            <div class="disk-list" v-if="getMonitoredApps(row).length">
+              <div v-for="app in getMonitoredApps(row)" :key="app.name">
+                <span :class="app.isRunning ? 'metric-ok' : 'metric-danger'">
+                  {{ app.name }} {{ app.isRunning ? '运行中' : '已停止' }}
+                </span>
+                <span class="muted">({{ app.processCount || 0 }}进程 / {{ app.threadCount || 0 }}线程)</span>
+                <div class="muted">
+                  CPU {{ formatPercent(app.cpuPercent) }} / 内存 {{ formatMb(app.memoryUsedMb) }}
+                </div>
+                <div class="app-actions" style="margin-top:4px;">
+                  <el-button size="small" type="success" plain @click="quickStartMonitoredApp(row, app)">启动</el-button>
+                  <el-button size="small" type="danger" plain @click="quickStopMonitoredApp(row, app)">停止</el-button>
+                  <el-dropdown @command="(cmd) => onMonitoredAppAction(row, app, cmd)">
+                    <el-button size="small" type="info" plain>
+                      操作
+                    </el-button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="logs">日志</el-dropdown-item>
+                        <el-dropdown-item command="screenshot">截屏</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
+              </div>
+            </div>
+            <div v-else class="muted">未配置</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="lastHeartbeat" label="最后心跳" min-width="170" sortable>
           <template #default="{ row }">
             <div>{{ formatTime(row.lastHeartbeat) }}</div>
             <div class="muted">{{ ageText(row.lastHeartbeat) }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="连接时间" min-width="170">
+        <el-table-column prop="connectedAt" label="连接时间" min-width="170" sortable>
           <template #default="{ row }">
             <div>{{ formatTime(row.connectedAt) }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="360" fixed="right" align="center">
+        <el-table-column label="操作" width="340" fixed="right" align="center">
           <template #default="{ row }">
             <div class="action-buttons">
               <el-button size="small" @click="openDetailDialog(row)">详情</el-button>
-              <el-button size="small" @click="openSettingDialog(row)">设置</el-button>
-              <el-button size="small" type="primary" @click="openCommDialog(row)">通信</el-button>
+              <el-button size="small" type="warning" @click="handleClientAction('agent_reboot', row)">重启系统</el-button>
 
               <el-dropdown trigger="click" @command="(cmd) => handleClientAction(cmd, row)">
                 <el-button size="small" type="success">
@@ -321,14 +353,9 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="get_config">获取配置</el-dropdown-item>
-                    <el-dropdown-item command="set_config">设置配置</el-dropdown-item>
-                    <el-dropdown-item divided command="app_start">启动应用</el-dropdown-item>
-                    <el-dropdown-item command="app_stop">停止应用</el-dropdown-item>
-                    <el-dropdown-item divided command="app_screenshot">应用截图</el-dropdown-item>
-                    <el-dropdown-item command="screen_screenshot">屏幕截图</el-dropdown-item>
-                    <el-dropdown-item divided command="machine_restart">机器重启</el-dropdown-item>
-                    <el-dropdown-item command="agent_reboot">Agent兼容重启</el-dropdown-item>
-                    <el-dropdown-item command="machine_logoff">机器注销</el-dropdown-item>
+                    <el-dropdown-item divided command="app_start">手动启动应用</el-dropdown-item>
+                    <el-dropdown-item command="app_stop">手动停止应用</el-dropdown-item>
+                    <el-dropdown-item divided command="screen_screenshot">屏幕截图</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -341,6 +368,34 @@
         暂无客户端数据
       </div>
     </el-card>
+    </template>
+
+    <template v-else>
+      <el-card shadow="never">
+        <div class="toolbar" style="margin-bottom: 12px;">
+          <el-select v-model="logClientId" clearable filterable placeholder="按Client筛选" style="width: 240px;">
+            <el-option v-for="c in clients" :key="c.clientId" :label="c.clientId" :value="c.clientId"></el-option>
+          </el-select>
+          <el-input v-model="logKeyword" clearable placeholder="搜索日志内容" style="width: 260px;"></el-input>
+          <el-switch v-model="logAutoRefresh" active-text="自动刷新" inactive-text="手动刷新"></el-switch>
+          <el-button type="primary" :loading="logsLoading" @click="loadPipeLogs">刷新日志</el-button>
+        </div>
+        <el-table :data="filteredLogs" border stripe v-loading="logsLoading" style="width: 100%">
+          <el-table-column prop="clientId" label="ClientId" width="170"></el-table-column>
+          <el-table-column label="时间" width="170">
+            <template #default="{ row }">{{ formatTime(row.ts) }}</template>
+          </el-table-column>
+          <el-table-column label="管道" width="220">
+            <template #default="{ row }">{{ row?.payload?.pipeName || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="日志内容" min-width="420">
+            <template #default="{ row }">
+              <div style="white-space: pre-wrap; word-break: break-all;">{{ row?.payload?.content || '' }}</div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+    </template>
 
     <!-- 详情弹窗 -->
     <el-dialog v-model="detailDialogVisible" width="900px" :title="`详情 - ${currentClient?.clientId || ''}`">
@@ -357,9 +412,24 @@
         <div style="margin-bottom:8px;font-weight:600;">原始数据</div>
         <div class="response-box">{{ prettyJson(currentClient || {}) }}</div>
       </div>
+
+      <div class="result-card" v-if="currentClient?.lastPipeMessage">
+        <div style="margin-bottom:8px;font-weight:600;">最近实时消息</div>
+        <div class="muted" style="margin-bottom:8px;">
+          管道：{{ currentClient?.lastPipeMessage?.payload?.pipeName || '-' }}，时间：{{ formatTime(currentClient?.lastPipeMessage?.ts) }}
+        </div>
+        <div class="response-box">{{ currentClient?.lastPipeMessage?.payload?.content || '' }}</div>
+      </div>
+
+      <div class="result-card" v-if="currentClient?.lastAppAlert?.payload?.screenshot?.fileUrl">
+        <div style="margin-bottom:8px;font-weight:600;">最近异常截图</div>
+        <div class="preview-image-wrap">
+          <img class="preview-image" :src="`${apiBase}${currentClient.lastAppAlert.payload.screenshot.fileUrl}`" alt="最近异常截图" />
+        </div>
+      </div>
     </el-dialog>
 
-    <!-- 设置弹窗：通用 JSON 配置，兼容 get_config / set_config -->
+    <!-- 设置弹窗：当前仅支持 get_config 读取 -->
     <el-dialog
       v-model="settingDialogVisible"
       width="960px"
@@ -371,12 +441,21 @@
         </el-form-item>
 
         <el-alert
-          title="这里使用通用 JSON 配置编辑器。客户端返回什么配置，就按 JSON 显示；保存时原样通过 set_config 下发。"
+          title="支持读取与下发监控应用配置（规则同 Manager：名称|路径|参数）"
           type="info"
           :closable="false"
           show-icon
           style="margin-bottom: 12px;"
         ></el-alert>
+
+        <el-form-item label="监控应用">
+          <el-input
+            v-model="settingMonitoredAppsText"
+            type="textarea"
+            :rows="6"
+            placeholder="每行：名称|完整EXE路径|参数；路径可留空"
+          ></el-input>
+        </el-form-item>
 
         <el-form-item label="配置JSON">
           <el-input
@@ -397,7 +476,7 @@
         <div class="dialog-footer">
           <el-button @click="settingDialogVisible = false">关闭</el-button>
           <el-button :loading="settingLoading" @click="fetchClientConfig">获取配置</el-button>
-          <el-button type="primary" :loading="settingSaving" @click="saveClientConfig">保存配置</el-button>
+          <el-button type="primary" :loading="settingLoading" @click="saveMonitoredAppsConfig">保存监控应用</el-button>
         </div>
       </template>
     </el-dialog>
@@ -433,6 +512,35 @@
           <el-button type="primary" :loading="sending" @click="sendMessageToClient">
             发送消息
           </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 应用实时日志弹窗 -->
+    <el-dialog
+      v-model="appLogDialogVisible"
+      width="980px"
+      :title="`应用日志 - ${appLogClientId || ''} / ${appLogAppName || ''}`"
+      @close="onAppLogDialogClose"
+    >
+      <el-form label-width="110px">
+        <el-form-item label="实时日志">
+          <el-switch v-model="appLogRealtime" @change="onAppLogRealtimeToggle"></el-switch>
+          <span class="inline-tip" style="margin-left: 12px;">{{ appLogStatus || '未连接' }}</span>
+        </el-form-item>
+
+        <el-form-item label="日志输出">
+          <div class="response-box" style="height: 360px; overflow: auto;">
+            <div v-for="(line, idx) in appLogItems" :key="idx">{{ line }}</div>
+            <div v-if="!appLogItems.length" class="muted">暂无日志</div>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="appLogItems = []">清空</el-button>
+          <el-button @click="appLogDialogVisible = false">关闭</el-button>
         </div>
       </template>
     </el-dialog>
@@ -480,36 +588,56 @@
         </el-form>
       </template>
 
-      <template v-if="commandType === 'app_screenshot' || commandType === 'screen_screenshot'">
+      <template v-if="commandType === 'app_screenshot'">
         <el-alert
-          :title="commandType === 'app_screenshot' ? '将请求客户机返回应用截图' : '将请求客户机返回屏幕截图'"
+          title="请选择监控列表中的应用后执行截图"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom:10px;"
+        ></el-alert>
+        <el-form label-width="100px">
+          <el-form-item label="监控应用">
+            <el-select v-model="commandForm.appScreenshot.name" filterable placeholder="请选择应用" style="width: 320px">
+              <el-option v-for="app in getMonitoredApps(currentClient)" :key="app.name" :label="app.name" :value="app.name"></el-option>
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </template>
+
+      <template v-if="commandType === 'screen_screenshot'">
+        <el-alert
+          title="将请求客户机返回系统屏幕截图"
           type="info"
           :closable="false"
           show-icon
         ></el-alert>
-
-        <div v-if="imagePreviewUrl" class="preview-image-wrap">
-          <img :src="imagePreviewUrl" class="preview-image" />
-          <div class="inline-tip" style="margin-top: 10px;">
-            {{ imagePreviewMeta }}
-          </div>
-        </div>
       </template>
 
-      <template v-if="commandType === 'machine_restart' || commandType === 'machine_logoff' || commandType === 'agent_reboot'">
+      <div
+        v-if="(commandType === 'app_screenshot' || commandType === 'screen_screenshot') && imagePreviewUrl"
+        class="preview-image-wrap"
+      >
+        <img :src="imagePreviewUrl" class="preview-image" />
+        <div class="inline-tip" style="margin-top: 10px;">
+          {{ imagePreviewMeta }}
+        </div>
+      </div>
+
+      <template v-if="commandType === 'agent_reboot'">
         <el-alert
-          :title="commandType === 'machine_logoff' ? '你正在对该客户机执行注销操作' : '你正在对该客户机执行重启操作'"
+          title="你正在对该客户机执行重启操作"
           type="warning"
           :closable="false"
           show-icon
         ></el-alert>
         <div style="margin-top: 12px;">
           <span class="danger-text">
-            {{ commandType === 'machine_logoff' ? '确认后客户机当前登录用户将被注销。' : '确认后客户机将执行重启命令。' }}
+            确认后客户机将执行重启命令。
           </span>
         </div>
         <div class="inline-tip" v-if="commandType === 'agent_reboot'">
-          Agent兼容重启会发送 action=reboot，适合前面 .NET8 示例服务端客户端协议。
+          重启系统会发送 action=reboot，适合前面 .NET8 示例服务端客户端协议。
         </div>
       </template>
 
@@ -542,24 +670,37 @@
 
           loadingClients: false,
           clients: [],
+          activePage: 'clients',
           keyword: '',
           autoRefresh: true,
           refreshTimer: null,
+          logsLoading: false,
+          logList: [],
+          logClientId: '',
+          logKeyword: '',
+          logAutoRefresh: true,
 
           detailDialogVisible: false,
           settingDialogVisible: false,
           commDialogVisible: false,
+          appLogDialogVisible: false,
           commandDialogVisible: false,
           currentClient: null,
 
           commForm: { text: '' },
           commResultText: '',
           sending: false,
+          appLogClientId: '',
+          appLogAppName: '',
+          appLogRealtime: false,
+          appLogStatus: '',
+          appLogItems: [],
+          appLogWs: null,
 
           settingLoading: false,
-          settingSaving: false,
           settingResultText: '',
           configJsonText: '',
+          settingMonitoredAppsText: '',
 
           commandType: '',
           commandDialogTitle: '',
@@ -569,10 +710,14 @@
           imagePreviewMeta: '',
           commandForm: {
             appStart: { name: '', filePath: '', arguments: '' },
-            appStop: { name: '', processId: 0 }
+            appStop: { name: '', processId: 0 },
+            appScreenshot: { name: '' }
           },
 
-          pollTimer: null
+          pollTimer: null,
+          asyncPollTimer: null,
+          pendingScreenshotRequests: [],
+          pendingPollBusy: false
         }
       },
 
@@ -582,8 +727,7 @@
           if (!kw) return this.clients
           return this.clients.filter(x =>
             String(x.clientId || '').toLowerCase().includes(kw) ||
-            String(x.machineName || '').toLowerCase().includes(kw) ||
-            String(x.group || '').toLowerCase().includes(kw)
+            String(x.localIp || '').toLowerCase().includes(kw)
           )
         },
         onlineCount() {
@@ -594,20 +738,38 @@
         },
         highDiskCount() {
           return this.clients.filter(x => this.maxDiskUsed(x) >= 90).length
+        },
+        filteredLogs() {
+          const kw = (this.logKeyword || '').trim().toLowerCase()
+          return (this.logList || []).filter(x => {
+            const clientOk = !this.logClientId || x.clientId === this.logClientId
+            if (!clientOk) return false
+            if (!kw) return true
+            const msg = String(x?.payload?.content || '').toLowerCase()
+            const pipe = String(x?.payload?.pipeName || '').toLowerCase()
+            return msg.includes(kw) || pipe.includes(kw) || String(x.clientId || '').toLowerCase().includes(kw)
+          })
         }
       },
 
       mounted() {
         this.loadClients()
+        this.loadPipeLogs()
         this.refreshTimer = setInterval(() => {
-          if (this.autoRefresh) this.loadClients(false)
+          if (this.activePage === 'clients' && this.autoRefresh) this.loadClients(false)
+          if (this.activePage === 'logs' && this.logAutoRefresh) this.loadPipeLogs(false)
         }, 5000)
+        this.asyncPollTimer = setInterval(() => {
+          this.pollPendingScreenshotRequests()
+        }, 2000)
       },
 
       beforeUnmount() {
         if (this.refreshTimer) clearInterval(this.refreshTimer)
+        if (this.asyncPollTimer) clearInterval(this.asyncPollTimer)
         this.clearPollTimer()
         this.clearImagePreview()
+        this.closeAppLogSocket()
       },
 
       methods: {
@@ -629,12 +791,96 @@
           this.imagePreviewMeta = ''
         },
 
+        isScreenshotCommand(commandType) {
+          return commandType === 'app_screenshot' || commandType === 'screen_screenshot'
+        },
+
+        async pollPendingScreenshotRequests() {
+          if (!this.pendingScreenshotRequests.length || this.pendingPollBusy) {
+            return
+          }
+
+          this.pendingPollBusy = true
+          try {
+            const remain = []
+            for (const item of this.pendingScreenshotRequests) {
+              let done = false
+              try {
+                const res = await fetch(`${this.apiBase}/result?requestId=${encodeURIComponent(item.requestId)}`, {
+                  headers: this.adminToken ? { 'X-Admin-Token': this.adminToken } : {}
+                })
+                const data = await res.json()
+                const status = data?.status || ''
+
+                if (data?.success && (status === 'done' || status === 'failed' || status === 'timeout')) {
+                  this.handleAsyncScreenshotResult(item, data)
+                  done = true
+                }
+              } catch (e) {
+                // 网络瞬时错误时保留请求，下一轮继续轮询。
+              }
+
+              if (!done) {
+                const age = Date.now() - Number(item.createdAt || 0)
+                if (age < 10 * 60 * 1000) {
+                  remain.push(item)
+                }
+              }
+            }
+            this.pendingScreenshotRequests = remain
+          } finally {
+            this.pendingPollBusy = false
+          }
+        },
+
+        handleAsyncScreenshotResult(item, result) {
+          const requestId = item.requestId
+          const status = result?.status || ''
+          if (status === 'done') {
+            const respData = result?.response?.data || {}
+            const fileUrl = respData?.fileUrl || ''
+            const imageBase64 = respData?.imageBase64 || ''
+            const contentType = respData?.contentType || 'image/jpeg'
+            const width = respData?.width || 0
+            const height = respData?.height || 0
+            const captureMode = respData?.captureMode || ''
+            const message = respData?.message || respData?.msg || '截图已完成'
+            const fullFileUrl = fileUrl ? `${this.apiBase}${fileUrl}` : ''
+
+            if (fullFileUrl) {
+              this.imagePreviewUrl = fullFileUrl
+            } else if (imageBase64) {
+              this.imagePreviewUrl = `data:${contentType};base64,${imageBase64}`
+            }
+
+            this.imagePreviewMeta = `状态：ok，尺寸：${width || '-'} x ${height || '-'}，方式：${captureMode || '-'}`
+            this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            ElMessage.success(`${message}（${item.clientId}）`)
+            return
+          }
+
+          this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+          if (status === 'timeout') {
+            ElMessage.warning(`截图请求超时（${item.clientId}）`)
+          } else {
+            ElMessage.error(`截图请求失败（${item.clientId}）`)
+          }
+        },
+
         metricClass(value, warn, danger) {
           const n = Number(value)
           if (!Number.isFinite(n)) return ''
           if (n >= danger) return 'metric-danger'
           if (n >= warn) return 'metric-warn'
           return 'metric-ok'
+        },
+
+        sortByOnline(a, b) {
+          return Number(!!a?.online) - Number(!!b?.online)
+        },
+
+        sortByDiskUsed(a, b) {
+          return this.maxDiskUsed(a) - this.maxDiskUsed(b)
         },
 
         formatPercent(v) {
@@ -649,9 +895,20 @@
           return `${n.toFixed(1)}GB`
         },
 
+        formatMb(v) {
+          const n = Number(v)
+          if (!Number.isFinite(n)) return '-'
+          return `${n.toFixed(1)}MB`
+        },
+
         getDisks(row) {
           const disks = row?.disks || row?.payload?.disks || row?.payload?.Disks || []
           return Array.isArray(disks) ? disks : []
+        },
+
+        getMonitoredApps(row) {
+          const apps = row?.monitoredApps || row?.payload?.monitoredApps || row?.payload?.MonitoredApps || []
+          return Array.isArray(apps) ? apps : []
         },
 
         maxDiskUsed(row) {
@@ -689,6 +946,16 @@
           }
         },
 
+        extractResultMessage(result, fallback = '') {
+          if (!result || typeof result !== 'object') return fallback
+          return (
+            result?.response?.msg ||
+            result?.response?.message ||
+            result?.message ||
+            fallback
+          )
+        },
+
         parseConfig(config) {
           if (!config) return null
           let obj = config
@@ -700,6 +967,52 @@
             }
           }
           return obj && typeof obj === 'object' ? obj : null
+        },
+
+        buildMonitoredAppLinesFromConfig(config) {
+          if (!config || typeof config !== 'object') return ''
+          const profiles = Array.isArray(config.monitoredAppProfiles) ? config.monitoredAppProfiles : []
+          if (profiles.length) {
+            return profiles
+              .map(p => {
+                const name = (p?.name || '').trim()
+                const filePath = (p?.filePath || '').trim()
+                const args = (p?.arguments || '').trim()
+                if (!name && !filePath) return ''
+                return `${name}|${filePath}|${args}`.replace(/\|+$/g, '')
+              })
+              .filter(Boolean)
+              .join('\n')
+          }
+
+          const names = Array.isArray(config.monitoredApps) ? config.monitoredApps : []
+          return names.map(x => String(x || '').trim()).filter(Boolean).join('\n')
+        },
+
+        parseMonitoredAppLines(raw) {
+          const profiles = []
+          const names = new Set()
+          String(raw || '')
+            .split(/\r?\n/)
+            .map(x => x.trim())
+            .filter(Boolean)
+            .forEach(line => {
+              const parts = line.split('|')
+              const name = (parts[0] || '').trim()
+              const filePath = (parts[1] || '').trim()
+              const argumentsText = (parts[2] || '').trim()
+              if (!name && !filePath) return
+
+              const profileName = name || (filePath.split(/[\\/]/).pop() || '').replace(/\.exe$/i, '')
+              if (!profileName) return
+              names.add(profileName)
+              profiles.push({ name: profileName, filePath, arguments: argumentsText })
+            })
+
+          return {
+            monitoredApps: Array.from(names),
+            monitoredAppProfiles: profiles
+          }
         },
 
         async loadClients(showLoading = true) {
@@ -725,6 +1038,30 @@
           }
         },
 
+        async loadPipeLogs(showLoading = true) {
+          if (showLoading) this.logsLoading = true
+          try {
+            const query = new URLSearchParams()
+            query.set('limit', '200')
+            if (this.logClientId) query.set('clientId', this.logClientId)
+
+            const res = await fetch(`${this.apiBase}/pipe_messages?${query.toString()}`, {
+              method: 'GET',
+              headers: this.adminToken ? { 'X-Admin-Token': this.adminToken } : {}
+            })
+            const data = await res.json()
+            if (!data.success) {
+              ElMessage.error(data.message || '获取日志失败')
+              return
+            }
+            this.logList = Array.isArray(data.logs) ? data.logs : (data.data || [])
+          } catch (err) {
+            ElMessage.error('获取日志失败')
+          } finally {
+            this.logsLoading = false
+          }
+        },
+
         async sendClientRequest(clientId, action, payload) {
           const res = await fetch(`${this.apiBase}/send`, {
             method: 'POST',
@@ -734,10 +1071,12 @@
           return await res.json()
         },
 
-        pollResult(requestId, onUpdate) {
+        pollResult(requestId, onUpdate, options = {}) {
           return new Promise((resolve) => {
             let count = 0
-            const maxCount = 60
+            const intervalMs = Number(options.intervalMs || 1000)
+            const maxWaitSeconds = Number(options.maxWaitSeconds || 70)
+            const maxCount = Math.max(1, Math.ceil((maxWaitSeconds * 1000) / intervalMs))
 
             this.clearPollTimer()
 
@@ -750,7 +1089,7 @@
                 const data = await res.json()
 
                 if (typeof onUpdate === 'function') {
-                  onUpdate(data)
+                  onUpdate(data, requestId)
                 }
 
                 if (data.success && (data.status === 'done' || data.status === 'timeout' || data.status === 'failed')) {
@@ -767,18 +1106,18 @@
                 this.clearPollTimer()
                 resolve(null)
               }
-            }, 1000)
+            }, intervalMs)
           })
         },
 
-        async sendAndWait(clientId, action, payload, onUpdate) {
+        async sendAndWait(clientId, action, payload, onUpdate, options = {}) {
           const sendData = await this.sendClientRequest(clientId, action, payload)
           if (!sendData.success || !sendData.requestId) {
             throw new Error(sendData.message || '发送失败')
           }
 
           const requestId = sendData.requestId
-          const result = await this.pollResult(requestId, onUpdate)
+          const result = await this.pollResult(requestId, onUpdate, options)
           return { requestId, result }
         },
 
@@ -787,11 +1126,169 @@
           this.detailDialogVisible = true
         },
 
+        async quickStartMonitoredApp(row, app) {
+          if (!row?.clientId || !app?.name) return
+          try {
+            const { requestId, result } = await this.sendAndWait(
+              row.clientId,
+              'command',
+              { command: 'app_start', args: { name: app.name } }
+            )
+            if (result?.success && result?.status === 'done') {
+              const msg = this.extractResultMessage(result, `已启动：${app.name}`)
+              ElMessage.success(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+              this.loadClients(false)
+            } else if (result?.success && result?.status === 'timeout') {
+              ElMessage.warning(`启动超时：${app.name}`)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            } else {
+              const msg = this.extractResultMessage(result, `启动返回异常：${app.name}`)
+              ElMessage.warning(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            }
+          } catch (err) {
+            ElMessage.error(err.message || `启动失败：${app.name}`)
+          }
+        },
+
+        async quickStopMonitoredApp(row, app) {
+          if (!row?.clientId || !app?.name) return
+          try {
+            const { requestId, result } = await this.sendAndWait(
+              row.clientId,
+              'command',
+              { command: 'app_stop', args: { name: app.name } }
+            )
+            if (result?.success && result?.status === 'done') {
+              const msg = this.extractResultMessage(result, `已停止：${app.name}`)
+              ElMessage.success(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+              this.loadClients(false)
+            } else if (result?.success && result?.status === 'timeout') {
+              ElMessage.warning(`停止超时：${app.name}`)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            } else {
+              const msg = this.extractResultMessage(result, `停止返回异常：${app.name}`)
+              ElMessage.warning(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            }
+          } catch (err) {
+            ElMessage.error(err.message || `停止失败：${app.name}`)
+          }
+        },
+
+        onMonitoredAppAction(row, app, command) {
+          if (command === 'logs') {
+            this.openAppLogDialog(row, app)
+            return
+          }
+          if (command === 'screenshot') {
+            this.handleClientAction('app_screenshot', row)
+            this.$nextTick(() => {
+              this.commandForm.appScreenshot.name = app?.name || ''
+            })
+          }
+        },
+
+        openAppLogDialog(row, app) {
+          this.appLogClientId = row?.clientId || ''
+          this.appLogAppName = app?.name || ''
+          this.appLogDialogVisible = true
+          this.appLogRealtime = true
+          this.appLogStatus = '连接中...'
+          this.appLogItems = []
+          this.connectAppLogSocket()
+        },
+
+        onAppLogDialogClose() {
+          this.appLogRealtime = false
+          this.closeAppLogSocket()
+        },
+
+        onAppLogRealtimeToggle(value) {
+          if (value) {
+            this.connectAppLogSocket()
+          } else {
+            this.closeAppLogSocket()
+            this.appLogStatus = '已关闭'
+          }
+        },
+
+        appendAppLogLine(line) {
+          this.appLogItems.push(line)
+          if (this.appLogItems.length > 1000) {
+            this.appLogItems.splice(0, this.appLogItems.length - 1000)
+          }
+        },
+
+        closeAppLogSocket() {
+          if (this.appLogWs) {
+            try { this.appLogWs.close() } catch (_) {}
+            this.appLogWs = null
+          }
+        },
+
+        connectAppLogSocket() {
+          if (!this.appLogDialogVisible || !this.appLogRealtime || !this.appLogClientId) {
+            return
+          }
+          this.closeAppLogSocket()
+
+          const wsBase = this.apiBase.replace(/^http/i, 'ws')
+          const ws = new WebSocket(wsBase)
+          this.appLogWs = ws
+          ws.onopen = () => {
+            this.appLogStatus = '已连接'
+            ws.send(JSON.stringify({
+              type: 'browser_subscribe',
+              adminToken: this.adminToken || '',
+              clientId: this.appLogClientId,
+              appName: this.appLogAppName
+            }))
+          }
+
+          ws.onmessage = (event) => {
+            try {
+              const msg = JSON.parse(event.data)
+              if (msg.type === 'browser_subscribe_ack') {
+                if (!msg.ok) {
+                  this.appLogStatus = msg.message || '订阅失败'
+                }
+                return
+              }
+              if (msg.type !== 'pipe_message') return
+              const row = msg.data || {}
+              const content = row?.payload?.content || ''
+              const appName = row?.payload?.appName || ''
+              if (this.appLogAppName && appName && this.appLogAppName.toLowerCase() !== String(appName).toLowerCase()) {
+                return
+              }
+              const ts = this.formatTime(row.ts || msg.ts || 0)
+              this.appendAppLogLine(`[${ts}] ${content}`)
+            } catch (e) {
+              // ignore invalid frame
+            }
+          }
+
+          ws.onerror = () => {
+            this.appLogStatus = '连接异常'
+          }
+
+          ws.onclose = () => {
+            if (this.appLogRealtime && this.appLogDialogVisible) {
+              this.appLogStatus = '已断开，重连中...'
+              setTimeout(() => this.connectAppLogSocket(), 1200)
+            }
+          }
+        },
+
         openSettingDialog(row) {
           this.currentClient = row
           this.settingDialogVisible = true
           this.settingResultText = ''
           this.configJsonText = ''
+          this.settingMonitoredAppsText = ''
           this.clearPollTimer()
         },
 
@@ -824,6 +1321,7 @@
             }
 
             const rawConfig =
+              result?.response?.payload ??
               result?.response?.data?.config ??
               result?.response?.data?.data?.config ??
               result?.response?.data ??
@@ -834,6 +1332,7 @@
             if (result.success && result.status === 'done') {
               if (config) {
                 this.configJsonText = this.prettyJson(config)
+                this.settingMonitoredAppsText = this.buildMonitoredAppLinesFromConfig(config)
                 this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(config)}`
                 ElMessage.success('获取配置成功')
               } else {
@@ -855,35 +1354,24 @@
           }
         },
 
-        async saveClientConfig() {
+        async saveMonitoredAppsConfig() {
           if (!this.currentClient?.clientId) {
             ElMessage.warning('未选择客户机')
             return
           }
 
-          let payload
+          this.settingLoading = true
+          this.settingResultText = '正在保存监控应用配置...'
           try {
-            payload = this.configJsonText.trim() ? JSON.parse(this.configJsonText) : {}
-          } catch (e) {
-            ElMessage.error('配置不是合法 JSON')
-            return
-          }
-
-          this.settingSaving = true
-          this.settingResultText = '正在保存配置...'
-
-          try {
-            const sendData = await this.sendClientRequest(this.currentClient.clientId, 'set_config', payload)
-
-            if (!sendData.success || !sendData.requestId) {
-              throw new Error(sendData.message || '发送失败')
-            }
-
-            const requestId = sendData.requestId
-
-            const result = await this.pollResult(requestId, (data) => {
-              this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
-            })
+            const parsed = this.parseMonitoredAppLines(this.settingMonitoredAppsText)
+            const { requestId, result } = await this.sendAndWait(
+              this.currentClient.clientId,
+              'set_config',
+              { config: parsed },
+              (data, cbRequestId) => {
+                this.settingResultText = `requestId: ${cbRequestId}\n\n${this.prettyJson(data)}`
+              }
+            )
 
             if (!result) {
               this.settingResultText = `requestId: ${requestId}\n\n查询超时，请稍后重试`
@@ -892,19 +1380,17 @@
             }
 
             this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
-
             if (result.success && result.status === 'done') {
-              ElMessage.success('保存配置成功')
-            } else if (result.success && result.status === 'timeout') {
-              ElMessage.warning('保存配置超时')
+              ElMessage.success('监控应用配置已下发并保存')
+              this.loadClients(false)
             } else {
-              ElMessage.error('保存配置失败')
+              ElMessage.warning('配置下发返回异常')
             }
           } catch (err) {
             this.settingResultText = String(err)
             ElMessage.error(err.message || '保存配置失败')
           } finally {
-            this.settingSaving = false
+            this.settingLoading = false
           }
         },
 
@@ -969,19 +1455,12 @@
             return
           }
 
-          if (command === 'set_config') {
-            this.openSettingDialog(row)
-            return
-          }
-
           const titleMap = {
-            app_start: '启动应用',
-            app_stop: '停止应用',
+            app_start: '手动启动应用',
+            app_stop: '手动停止应用',
             app_screenshot: '应用截图',
             screen_screenshot: '屏幕截图',
-            machine_restart: '机器重启',
-            agent_reboot: 'Agent兼容重启',
-            machine_logoff: '机器注销'
+            agent_reboot: '重启系统'
           }
 
           this.commandType = command
@@ -998,6 +1477,10 @@
           if (command === 'app_stop') {
             this.commandForm.appStop = { name: '', processId: 0 }
           }
+
+          if (command === 'app_screenshot') {
+            this.commandForm.appScreenshot = { name: this.getMonitoredApps(row)?.[0]?.name || '' }
+          }
         },
 
         async submitCommand() {
@@ -1011,7 +1494,7 @@
             return
           }
 
-          if (['machine_restart', 'machine_logoff', 'agent_reboot'].includes(this.commandType)) {
+          if (['agent_reboot'].includes(this.commandType)) {
             try {
               await ElMessageBox.confirm(
                 `确认要对客户机 ${this.currentClient.clientId} 执行 ${this.commandDialogTitle} 吗？`,
@@ -1033,13 +1516,14 @@
 
           if (this.commandType === 'app_start') {
             const filePath = (this.commandForm.appStart.filePath || '').trim()
-            if (!filePath) {
-              ElMessage.warning('请填写应用路径')
+            const name = (this.commandForm.appStart.name || '').trim()
+            if (!filePath && !name) {
+              ElMessage.warning('应用路径和应用名称至少填写一个')
               return
             }
 
             payload.args = {
-              name: (this.commandForm.appStart.name || '').trim(),
+              name,
               filePath,
               arguments: (this.commandForm.appStart.arguments || '').trim()
             }
@@ -1057,17 +1541,44 @@
             payload.args = { name, processId }
           }
 
+          if (this.commandType === 'app_screenshot') {
+            const name = (this.commandForm.appScreenshot.name || '').trim()
+            if (!name) {
+              ElMessage.warning('请选择监控应用')
+              return
+            }
+            payload.args = { name }
+          }
+
           this.commandLoading = true
-          this.commandResultText = '正在执行命令...'
+          this.commandResultText = this.isScreenshotCommand(this.commandType) ? '正在提交截图请求...' : '正在执行命令...'
           this.clearImagePreview()
 
           try {
+            if (this.isScreenshotCommand(this.commandType)) {
+              const sendData = await this.sendClientRequest(this.currentClient.clientId, action, payload)
+              if (!sendData.success || !sendData.requestId) {
+                throw new Error(sendData.message || '发送失败')
+              }
+
+              const requestId = sendData.requestId
+              this.pendingScreenshotRequests.push({
+                requestId,
+                clientId: this.currentClient.clientId,
+                commandType: this.commandType,
+                createdAt: Date.now()
+              })
+              this.commandResultText = `requestId: ${requestId}\n\n截图请求已提交，等待 Agent/Manager 完成后异步回传...`
+              ElMessage.success('截图请求已提交，结果会异步回传')
+              return
+            }
+
             const { requestId, result } = await this.sendAndWait(
               this.currentClient.clientId,
               action,
               payload,
-              (data) => {
-                this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+              (data, cbRequestId) => {
+                this.commandResultText = `requestId: ${cbRequestId}\n\n${this.prettyJson(data)}`
               }
             )
 
@@ -1088,7 +1599,7 @@
               const height = respData?.height || 0
               const captureMode = respData?.captureMode || ''
               const status = respData?.status || ''
-              const message = respData?.message || respData?.msg || '执行成功'
+              const message = respData?.message || respData?.msg || result?.response?.msg || '执行成功'
               const fullFileUrl = fileUrl ? `${this.apiBase}${fileUrl}` : ''
 
               if (this.commandType === 'app_screenshot' || this.commandType === 'screen_screenshot') {
