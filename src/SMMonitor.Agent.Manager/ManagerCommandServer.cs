@@ -121,7 +121,8 @@ public static class ManagerCommandServer
                     root.TryGetProperty("quality", out var aq) && aq.TryGetInt32(out var aqv) ? Math.Clamp(aqv, 30, 100) : 70),
                 "start_process" => StartProcessInManagerSession(
                     root.TryGetProperty("filePath", out var fp) ? (fp.GetString() ?? "") : "",
-                    root.TryGetProperty("arguments", out var arg) ? (arg.GetString() ?? "") : ""),
+                    root.TryGetProperty("arguments", out var arg) ? (arg.GetString() ?? "") : "",
+                    root.TryGetProperty("workingDirectory", out var wd) ? (wd.GetString() ?? "") : ""),
                 _ => ManagerCaptureResponse.Fail($"unsupported action: {action}")
             };
         }
@@ -131,7 +132,7 @@ public static class ManagerCommandServer
         }
     }
 
-    private static ManagerCaptureResponse StartProcessInManagerSession(string filePath, string arguments)
+    private static ManagerCaptureResponse StartProcessInManagerSession(string filePath, string arguments, string workingDirectory)
     {
         filePath = (filePath ?? "").Trim();
         if (filePath.Length == 0)
@@ -139,12 +140,22 @@ public static class ManagerCommandServer
             return ManagerCaptureResponse.Fail("filePath required");
         }
 
+        workingDirectory = (workingDirectory ?? "").Trim();
+        if (workingDirectory.Length == 0)
+        {
+            workingDirectory = Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory;
+        }
+        else if (!Directory.Exists(workingDirectory))
+        {
+            return ManagerCaptureResponse.Fail($"working directory not found: {workingDirectory}");
+        }
+
         var process = Process.Start(new ProcessStartInfo
         {
             FileName = filePath,
             Arguments = arguments ?? "",
             UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory
+            WorkingDirectory = workingDirectory
         });
 
         if (process == null)

@@ -126,7 +126,7 @@ public static class ManagerScreenshotBridge
         }
     }
 
-    public static async Task<(bool ok, string message, int processId)> TryStartProcessAsync(string filePath, string arguments, CancellationToken token)
+    public static async Task<(bool ok, string message, int processId)> TryStartProcessAsync(string filePath, string arguments, string workingDirectory, CancellationToken token)
     {
         try
         {
@@ -145,7 +145,8 @@ public static class ManagerScreenshotBridge
             {
                 action = "start_process",
                 filePath,
-                arguments = arguments ?? ""
+                arguments = arguments ?? "",
+                workingDirectory = workingDirectory ?? ""
             });
 
             await writer.WriteLineAsync(reqJson);

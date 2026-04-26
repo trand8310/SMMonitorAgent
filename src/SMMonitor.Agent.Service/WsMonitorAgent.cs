@@ -552,6 +552,7 @@ public sealed class WsMonitorAgent
             string startMessage = "";
             var managerProcessId = 0;
             var managerErrors = new List<string>();
+            var workingDirectory = ResolveWorkingDirectory(filePath);
 
             if (triedTargets.Count == 0)
             {
@@ -564,9 +565,14 @@ public sealed class WsMonitorAgent
             foreach (var candidate in triedTargets)
             {
                 launchTarget = candidate;
+                var candidateWorkingDirectory = ResolveWorkingDirectory(candidate);
+                if (!string.IsNullOrWhiteSpace(candidateWorkingDirectory))
+                {
+                    workingDirectory = candidateWorkingDirectory;
+                }
 
                 // 优先尝试在 Manager 所在会话启动（用户/RDP 可见）。
-                var managerStart = await ManagerScreenshotBridge.TryStartProcessAsync(candidate, appArgs, token);
+                var managerStart = await ManagerScreenshotBridge.TryStartProcessAsync(candidate, appArgs, workingDirectory, token);
                 if (managerStart.ok)
                 {
                     startMode = "manager-session";
@@ -595,6 +601,7 @@ public sealed class WsMonitorAgent
                     name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(launchTarget) : name,
                     filePath = launchTarget,
                     arguments = appArgs,
+                    workingDirectory,
                     processId = managerProcessId,
                     startMode,
                     startMessage,
@@ -608,8 +615,8 @@ public sealed class WsMonitorAgent
                 "Service",
                 "AppStart",
                 managerProcessId > 0
-                    ? $"success: target={launchTarget}, pid={managerProcessId}, mode={startMode}, msg={startMessage}"
-                    : $"failed: manager-session-required, target={launchTarget}, args={appArgs}, reason={startMessage}",
+                    ? $"success: target={launchTarget}, workingDir={workingDirectory}, pid={managerProcessId}, mode={startMode}, msg={startMessage}"
+                    : $"failed: manager-session-required, target={launchTarget}, workingDir={workingDirectory}, args={appArgs}, reason={startMessage}",
                 token);
         }
         catch (Exception ex)
@@ -656,6 +663,23 @@ public sealed class WsMonitorAgent
         }
 
         return set;
+    }
+
+    private static string ResolveWorkingDirectory(string filePath)
+    {
+        var value = (filePath ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "";
+        }
+
+        if (Directory.Exists(value))
+        {
+            return value;
+        }
+
+        var dir = Path.GetDirectoryName(value);
+        return string.IsNullOrWhiteSpace(dir) ? "" : dir;
     }
 
     private async Task HandleAppStopAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
