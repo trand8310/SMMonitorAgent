@@ -30,6 +30,9 @@ public sealed class MainForm : Form
     private readonly ListBox _lstLogs = new();
     private readonly List<ManagerPipeLog> _logs = new();
     private readonly object _logLock = new();
+    private readonly NotifyIcon _trayIcon = new();
+    private readonly ContextMenuStrip _trayMenu = new();
+    private bool _exitRequested;
 
     private readonly Label _lblServiceStatus = new();
     private readonly Label _lblWsStatus = new();
@@ -61,7 +64,55 @@ public sealed class MainForm : Form
 
         _ = Task.Run(() => PipeLogLoopAsync(_loopCts.Token));
         _ = Task.Run(() => ManagerCommandServer.RunAsync(AddLog, _loopCts.Token));
-        FormClosing += (_, _) => _loopCts.Cancel();
+        InitTray();
+        FormClosing += MainForm_FormClosing;
+        Resize += MainForm_Resize;
+    }
+
+    private void InitTray()
+    {
+        _trayMenu.Items.Add("打开管理器", null, (_, _) => RestoreFromTray());
+        _trayMenu.Items.Add("退出", null, (_, _) =>
+        {
+            _exitRequested = true;
+            Close();
+        });
+
+        _trayIcon.Text = "SMMonitorAgent Manager";
+        _trayIcon.Icon = SystemIcons.Application;
+        _trayIcon.ContextMenuStrip = _trayMenu;
+        _trayIcon.Visible = true;
+        _trayIcon.DoubleClick += (_, _) => RestoreFromTray();
+    }
+
+    private void MainForm_Resize(object? sender, EventArgs e)
+    {
+        if (WindowState == FormWindowState.Minimized)
+        {
+            Hide();
+        }
+    }
+
+    private void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (!_exitRequested && e.CloseReason != CloseReason.WindowsShutDown && e.CloseReason != CloseReason.TaskManagerClosing)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+
+        _loopCts.Cancel();
+        _trayIcon.Visible = false;
+        _trayIcon.Dispose();
+        _trayMenu.Dispose();
+    }
+
+    private void RestoreFromTray()
+    {
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
     }
 
     private void BuildUi()
@@ -540,6 +591,11 @@ public sealed class MainForm : Form
 
     private void AddLog(string line)
     {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return;
+        }
+
         var item = new ManagerPipeLog
         {
             Timestamp = DateTime.Now,
@@ -558,6 +614,18 @@ public sealed class MainForm : Form
         }
         catch
         {
+        }
+
+        item.Message = item.Message?.Trim() ?? "";
+        if (item.Message.Length == 0)
+        {
+            return;
+        }
+
+        if (item.Source.Length == 0 && item.Message.StartsWith("[ManagerCmd]", StringComparison.OrdinalIgnoreCase))
+        {
+            item.Source = "ManagerCmd";
+            item.Category = "Service";
         }
 
         lock (_logLock)
@@ -588,6 +656,7 @@ public sealed class MainForm : Form
 
             var filtered = items
                 .Where(x => category == "全部" || string.Equals(x.Category, category, StringComparison.OrdinalIgnoreCase))
+                .Where(x => !string.IsNullOrWhiteSpace(x.Message))
                 .Where(x => keyword.Length == 0 || (x.Message?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false))
                 .Take(500)
                 .Select(x => $"[{x.Timestamp:HH:mm:ss}] [{x.Category}] [{x.Source}] {x.Message}")

@@ -41,6 +41,12 @@ public static class ManagerCommandServer
             {
                 break;
             }
+            catch (IOException)
+            {
+                // Client disconnected (normal path after single request/response).
+                // Do not spam UI log with "Pipe is broken".
+                await Task.Delay(80, token);
+            }
             catch (Exception ex)
             {
                 log($"[ManagerCmd] loop error: {ex.Message}");
