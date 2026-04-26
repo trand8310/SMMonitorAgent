@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.ServiceProcess;
 using System.Text.Json;
+using Microsoft.Win32;
 using SMMonitor.Common;
 
 namespace SMMonitor.Agent.Manager;
@@ -20,6 +21,7 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _numDisk = new();
     private readonly CheckBox _chkEnableUpload = new();
     private readonly CheckBox _chkEnableReboot = new();
+    private readonly CheckBox _chkManagerAutoStart = new();
     private readonly CheckBox _chkAutoCaptureOnFailure = new();
     private readonly CheckBox _chkEnablePipeForward = new();
     private readonly TextBox _txtMonitoredApps = new();
@@ -47,6 +49,7 @@ public sealed class MainForm : Form
     {
         PropertyNameCaseInsensitive = true
     };
+    private bool _loadingAutoStartOption;
 
     public MainForm(bool startToTray = false)
     {
@@ -58,6 +61,7 @@ public sealed class MainForm : Form
         Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular);
 
         BuildUi();
+        LoadManagerAutoStartOption();
         LoadConfig();
         RefreshStatus();
 
@@ -194,6 +198,14 @@ public sealed class MainForm : Form
         btnRefresh.Click += (_, _) => RefreshStatus();
         btnPanel.Controls.AddRange([btnSave, btnRestart, btnStart, btnStop, btnOpenDir, btnRefresh]);
         AddRow(svc, "服务控制", btnPanel, 56);
+
+        _chkManagerAutoStart.Text = "登录系统自动启动 Manager（托盘）";
+        _chkManagerAutoStart.CheckedChanged += (_, _) =>
+        {
+            if (_loadingAutoStartOption) return;
+            SetManagerAutoStartEnabled(_chkManagerAutoStart.Checked);
+        };
+        AddRow(svc, "Manager自启动", _chkManagerAutoStart, 40);
 
         var status = CreatePageLayout(tabStatus);
         AddStatusRow(status, "服务状态", _lblServiceStatus);
@@ -681,6 +693,79 @@ public sealed class MainForm : Form
             _lstLogs.Items.AddRange(filtered);
             _lstLogs.EndUpdate();
         });
+    }
+
+    private static bool IsManagerAutoStartEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: false);
+        var value = key?.GetValue("SMMonitorAgentManager") as string;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool? ReadManagerAutoStartPreference()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(@"Software\SMMonitorAgent\Manager", writable: false);
+        if (key == null) return null;
+        var value = key.GetValue("AutoStartEnabled");
+        return value switch
+        {
+            1 => true,
+            0 => false,
+            int i => i != 0,
+            string s when int.TryParse(s, out var n) => n != 0,
+            _ => null
+        };
+    }
+
+    private static void WriteManagerAutoStartPreference(bool enabled)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(@"Software\SMMonitorAgent\Manager", writable: true)
+                       ?? Registry.CurrentUser.CreateSubKey(@"Software\SMMonitorAgent\Manager");
+        key?.SetValue("AutoStartEnabled", enabled ? 1 : 0, RegistryValueKind.DWord);
+    }
+
+    private static void SetManagerAutoStartEnabled(bool enabled)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", writable: true)
+                       ?? Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+        if (key == null)
+        {
+            MessageBox.Show("无法访问开机启动注册表项。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        if (enabled)
+        {
+            var exePath = Environment.ProcessPath ?? Application.ExecutablePath;
+            key.SetValue("SMMonitorAgentManager", $"\"{exePath}\" --tray", RegistryValueKind.String);
+        }
+        else
+        {
+            key.DeleteValue("SMMonitorAgentManager", throwOnMissingValue: false);
+        }
+
+        WriteManagerAutoStartPreference(enabled);
+    }
+
+    private void LoadManagerAutoStartOption()
+    {
+        var preference = ReadManagerAutoStartPreference();
+        var enabled = preference ?? true;
+
+        // 首次未配置时默认勾选并写入登录自启动；之后尊重用户显式勾选状态。
+        if (preference == null)
+        {
+            SetManagerAutoStartEnabled(true);
+            enabled = true;
+        }
+        else if (enabled != IsManagerAutoStartEnabled())
+        {
+            SetManagerAutoStartEnabled(enabled);
+        }
+
+        _loadingAutoStartOption = true;
+        _chkManagerAutoStart.Checked = enabled;
+        _loadingAutoStartOption = false;
     }
 }
 

@@ -58,6 +58,7 @@ C:\ProgramData\SMMonitorAgent\status.json
 ### Manager 开机登录自动启动（托盘）与单实例
 
 Manager 已内置单实例控制：重复启动时仅保留一个进程实例。  
+Manager “服务控制”页新增“Manager自启动”复选项，默认勾选：首次手动启动会自动写入登录自启动（托盘）；手动取消勾选后则不再随登录自动启动。  
 
 可执行以下命令设置“登录后自动启动到托盘”：
 
