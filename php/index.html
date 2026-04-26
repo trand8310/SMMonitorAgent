@@ -120,6 +120,18 @@
       gap: 8px;
       flex-wrap: wrap;
     }
+    .app-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .app-actions .el-button + .el-button {
+      margin-left: 0 !important;
+    }
+    .app-actions .el-dropdown {
+      margin-left: 0 !important;
+    }
     .result-card {
       margin-top: 14px;
       border: 1px solid #ebeef5;
@@ -309,11 +321,11 @@
                 <div class="muted">
                   CPU {{ formatPercent(app.cpuPercent) }} / 内存 {{ formatMb(app.memoryUsedMb) }}
                 </div>
-                <div style="margin-top:4px;">
+                <div class="app-actions" style="margin-top:4px;">
                   <el-button size="small" type="success" plain @click="quickStartMonitoredApp(row, app)">启动</el-button>
                   <el-button size="small" type="danger" plain @click="quickStopMonitoredApp(row, app)">停止</el-button>
                   <el-dropdown @command="(cmd) => onMonitoredAppAction(row, app, cmd)">
-                    <el-button size="small" plain>
+                    <el-button size="small" type="info" plain>
                       操作
                     </el-button>
                     <template #dropdown>
@@ -1279,7 +1291,7 @@
             return
           }
           if (command === 'screenshot') {
-            this.openCommandDialog(row, 'app_screenshot')
+            this.handleClientAction('app_screenshot', row)
             this.$nextTick(() => {
               this.commandForm.appScreenshot.name = app?.name || ''
             })
