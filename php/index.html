@@ -1151,50 +1151,6 @@
           this.detailDialogVisible = true
         },
 
-        async applyPipeLivePush() {
-          if (!this.currentClient?.clientId) {
-            ElMessage.warning('请先选择客户机')
-            return
-          }
-
-          this.livePushLoading = true
-          this.livePushResultText = '正在下发实时推送开关...'
-          try {
-            const { requestId, result } = await this.sendAndWait(
-              this.currentClient.clientId,
-              'command',
-              {
-                command: 'pipe_live_push',
-                args: {
-                  enabled: !!this.livePushEnabled,
-                  appName: (this.livePushAppName || '').trim()
-                }
-              },
-              (data, cbRequestId) => {
-                this.livePushResultText = `requestId: ${cbRequestId}\n${this.prettyJson(data)}`
-              }
-            )
-
-            if (!result) {
-              this.livePushResultText = `requestId: ${requestId}\n查询超时`
-              ElMessage.warning('下发超时')
-              return
-            }
-
-            this.livePushResultText = `requestId: ${requestId}\n${this.prettyJson(result)}`
-            if (result.success && result.status === 'done') {
-              ElMessage.success(this.livePushEnabled ? '已开启实时推送' : '已关闭实时推送')
-            } else {
-              ElMessage.warning('下发已返回，但状态异常')
-            }
-          } catch (err) {
-            this.livePushResultText = String(err)
-            ElMessage.error(err.message || '下发失败')
-          } finally {
-            this.livePushLoading = false
-          }
-        },
-
         async quickStartMonitoredApp(row, app) {
           if (!row?.clientId || !app?.name) return
           try {

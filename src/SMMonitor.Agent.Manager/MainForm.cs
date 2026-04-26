@@ -43,8 +43,12 @@ public sealed class MainForm : Form
 
     private readonly System.Windows.Forms.Timer _timer = new();
     private readonly CancellationTokenSource _loopCts = new();
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
-    public MainForm()
+    public MainForm(bool startToTray = false)
     {
         Text = "SMMonitorAgent 管理工具";
         Width = 960;
@@ -65,6 +69,15 @@ public sealed class MainForm : Form
         InitTray();
         FormClosing += MainForm_FormClosing;
         Resize += MainForm_Resize;
+
+        if (startToTray)
+        {
+            Shown += (_, _) =>
+            {
+                WindowState = FormWindowState.Minimized;
+                Hide();
+            };
+        }
     }
 
     private void InitTray()
@@ -570,7 +583,7 @@ public sealed class MainForm : Form
 
         try
         {
-            var parsed = JsonSerializer.Deserialize<ManagerPipeLog>(line);
+            var parsed = JsonSerializer.Deserialize<ManagerPipeLog>(line, JsonOptions);
             if (parsed != null)
             {
                 item = parsed;
@@ -618,7 +631,7 @@ public sealed class MainForm : Form
 
         try
         {
-            var payload = JsonSerializer.Deserialize<ManagerConfigSyncPayload>(message);
+            var payload = JsonSerializer.Deserialize<ManagerConfigSyncPayload>(message, JsonOptions);
             if (payload == null)
             {
                 return;

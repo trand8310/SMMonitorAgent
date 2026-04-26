@@ -55,6 +55,28 @@ C:\ProgramData\SMMonitorAgent\status.json
 4. 右键用管理员身份运行 `scripts\install-service-admin.bat` 安装并启动 Windows 服务。
 5. 打开 `publish\manager\SMMonitor.Agent.Manager.exe` 修改配置和查看状态。
 
+### Manager 开机登录自动启动（托盘）与单实例
+
+Manager 已内置单实例控制：重复启动时仅保留一个进程实例。  
+
+可执行以下命令设置“登录后自动启动到托盘”：
+
+```bash
+SMMonitor.Agent.Manager.exe --enable-autostart
+```
+
+取消自动启动：
+
+```bash
+SMMonitor.Agent.Manager.exe --disable-autostart
+```
+
+手动以托盘模式启动：
+
+```bash
+SMMonitor.Agent.Manager.exe --tray
+```
+
 ## 客户端上报 JSON
 
 ```json
