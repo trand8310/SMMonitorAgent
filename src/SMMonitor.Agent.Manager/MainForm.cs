@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.ServiceProcess;
 using System.Text.Json;
 using Microsoft.Win32;
