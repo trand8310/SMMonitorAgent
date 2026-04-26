@@ -166,6 +166,7 @@ function save_client_state(Redis $redis, array $config, string $prefix, string $
     $row['memoryTotalMb'] = $payload['memoryTotalMb'] ?? $payload['MemoryTotalMb'] ?? ($old['memoryTotalMb'] ?? null);
     $row['memoryAvailableMb'] = $payload['memoryAvailableMb'] ?? $payload['MemoryAvailableMb'] ?? ($old['memoryAvailableMb'] ?? null);
     $row['disks'] = $payload['disks'] ?? $payload['Disks'] ?? ($old['disks'] ?? []);
+    $row['monitoredApps'] = $payload['monitoredApps'] ?? $payload['MonitoredApps'] ?? ($old['monitoredApps'] ?? []);
 
     $ttl = (int)($config['client_ttl_seconds'] ?? 180);
 
@@ -182,6 +183,36 @@ function save_pending_request(Redis $redis, array $config, string $prefix, strin
 {
     $ttl = (int)($config['request_ttl_seconds'] ?? 300);
     $redis->setex($prefix . 'request:' . $requestId, $ttl, json_encode_cn($row));
+}
+
+function resolve_request_timeout_seconds(array $config, string $action, array $payload): int
+{
+    $default = (int)($config['request_timeout_seconds'] ?? 60);
+    if ($default <= 0) {
+        $default = 60;
+    }
+
+    $screenshotTimeout = (int)($config['screenshot_request_timeout_seconds'] ?? max($default, 180));
+    if ($screenshotTimeout <= 0) {
+        $screenshotTimeout = max($default, 180);
+    }
+
+    $action = strtolower(trim($action));
+    if ($action === 'screen_screenshot' || $action === 'app_screenshot') {
+        return $screenshotTimeout;
+    }
+
+    if ($action === 'command') {
+        $command = '';
+        if (isset($payload['command'])) {
+            $command = strtolower(trim((string)$payload['command']));
+        }
+        if ($command === 'screen_screenshot' || $command === 'app_screenshot') {
+            return $screenshotTimeout;
+        }
+    }
+
+    return $default;
 }
 
 function get_request_row(Redis $redis, string $prefix, string $requestId): ?array
@@ -332,6 +363,89 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
         return;
     }
 
+    if ($type === 'app_alert') {
+        $clientId = (string)($data['clientId'] ?? ($fdClientMap[$frame->fd] ?? ''));
+        if ($clientId !== '') {
+            $clientFdMap[$clientId] = $frame->fd;
+            $fdClientMap[$frame->fd] = $clientId;
+        }
+
+        $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
+        if (isset($payload['screenshot']) && is_array($payload['screenshot'])) {
+            $converted = save_base64_file_if_needed($redis, $config, $prefix, ['data' => $payload['screenshot']]);
+            if (isset($converted['data']) && is_array($converted['data'])) {
+                $payload['screenshot'] = $converted['data'];
+            }
+        }
+
+        $alert = [
+            'type' => 'app_alert',
+            'level' => (string)($data['level'] ?? 'warning'),
+            'clientId' => $clientId,
+            'payload' => $payload,
+            'ts' => (int)($data['ts'] ?? now_ts()),
+        ];
+
+        if ($clientId !== '') {
+            $clientKey = $prefix . 'client:' . $clientId;
+            $clientRaw = $redis->get($clientKey);
+            if (is_string($clientRaw) && $clientRaw !== '') {
+                $clientData = json_decode($clientRaw, true);
+                if (is_array($clientData)) {
+                    $clientData['lastAppAlert'] = $alert;
+                    $ttl = (int)($config['client_ttl_seconds'] ?? 180);
+                    $redis->setex($clientKey, $ttl, json_encode_cn($clientData));
+                }
+            }
+        }
+
+        $redis->lPush($prefix . 'app_alerts', json_encode_cn($alert));
+        $redis->lTrim($prefix . 'app_alerts', 0, 299);
+        $redis->expire($prefix . 'app_alerts', (int)($config['request_ttl_seconds'] ?? 300));
+
+        echo '[' . date('H:i:s') . "] app_alert {$clientId}\n";
+        return;
+    }
+
+    if ($type === 'app_pipe_message') {
+        $clientId = (string)($data['clientId'] ?? ($fdClientMap[$frame->fd] ?? ''));
+        if ($clientId !== '') {
+            $clientFdMap[$clientId] = $frame->fd;
+            $fdClientMap[$frame->fd] = $clientId;
+        }
+
+        $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
+        $row = [
+            'type' => 'app_pipe_message',
+            'clientId' => $clientId,
+            'ts' => (int)($data['ts'] ?? now_ts()),
+            'payload' => [
+                'pipeName' => (string)($payload['pipeName'] ?? ''),
+                'content' => (string)($payload['content'] ?? ''),
+            ],
+        ];
+
+        if ($clientId !== '') {
+            $clientKey = $prefix . 'client:' . $clientId;
+            $clientRaw = $redis->get($clientKey);
+            if (is_string($clientRaw) && $clientRaw !== '') {
+                $clientData = json_decode($clientRaw, true);
+                if (is_array($clientData)) {
+                    $clientData['lastPipeMessage'] = $row;
+                    $ttl = (int)($config['client_ttl_seconds'] ?? 180);
+                    $redis->setex($clientKey, $ttl, json_encode_cn($clientData));
+                }
+            }
+        }
+
+        $redis->lPush($prefix . 'pipe_messages', json_encode_cn($row));
+        $redis->lTrim($prefix . 'pipe_messages', 0, 499);
+        $redis->expire($prefix . 'pipe_messages', (int)($config['request_ttl_seconds'] ?? 300));
+
+        echo '[' . date('H:i:s') . "] app_pipe_message {$clientId}\n";
+        return;
+    }
+
     if ($type === 'response') {
         $clientId = (string)($data['clientId'] ?? ($fdClientMap[$frame->fd] ?? ''));
         $requestId = (string)($data['requestId'] ?? '');
@@ -453,6 +567,36 @@ $server->on('Request', function (Request $request, Response $response) use ($ser
         return;
     }
 
+    if ($path === '/pipe_messages') {
+        $limit = (int)($request->get['limit'] ?? 200);
+        $limit = max(1, min(1000, $limit));
+        $clientId = trim((string)($request->get['clientId'] ?? ''));
+
+        $rows = [];
+        $items = $redis->lRange($prefix . 'pipe_messages', 0, $limit * 3) ?: [];
+        foreach ($items as $raw) {
+            $decoded = json_decode((string)$raw, true);
+            if (!is_array($decoded)) {
+                continue;
+            }
+            if ($clientId !== '' && (string)($decoded['clientId'] ?? '') !== $clientId) {
+                continue;
+            }
+            $rows[] = $decoded;
+            if (count($rows) >= $limit) {
+                break;
+            }
+        }
+
+        send_json($response, [
+            'success' => true,
+            'logs' => $rows,
+            'data' => $rows,
+            'time' => now_ts(),
+        ]);
+        return;
+    }
+
     if ($path === '/send') {
         if ($method !== 'POST') {
             send_json($response, ['success' => false, 'message' => 'method not allowed'], 405);
@@ -492,6 +636,7 @@ $server->on('Request', function (Request $request, Response $response) use ($ser
             'clientId' => $clientId,
             'action' => $action,
             'payload' => $payload,
+            'timeoutSeconds' => resolve_request_timeout_seconds($config, $action, is_array($payload) ? $payload : []),
             'createdAt' => now_ts(),
             'updatedAt' => now_ts(),
         ];
@@ -541,7 +686,10 @@ $server->on('Request', function (Request $request, Response $response) use ($ser
 
         if (($row['status'] ?? '') === 'pending') {
             $createdAt = (int)($row['createdAt'] ?? now_ts());
-            $timeout = (int)($config['request_timeout_seconds'] ?? 60);
+            $timeout = (int)($row['timeoutSeconds'] ?? ($config['request_timeout_seconds'] ?? 60));
+            if ($timeout <= 0) {
+                $timeout = (int)($config['request_timeout_seconds'] ?? 60);
+            }
 
             if (now_ts() - $createdAt > $timeout) {
                 $row['status'] = 'timeout';
