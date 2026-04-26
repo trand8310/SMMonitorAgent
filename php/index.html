@@ -708,7 +708,10 @@
             appScreenshot: { name: '' }
           },
 
-          pollTimer: null
+          pollTimer: null,
+          asyncPollTimer: null,
+          pendingScreenshotRequests: [],
+          pendingPollBusy: false
         }
       },
 
@@ -751,10 +754,14 @@
           if (this.activePage === 'clients' && this.autoRefresh) this.loadClients(false)
           if (this.activePage === 'logs' && this.logAutoRefresh) this.loadPipeLogs(false)
         }, 5000)
+        this.asyncPollTimer = setInterval(() => {
+          this.pollPendingScreenshotRequests()
+        }, 2000)
       },
 
       beforeUnmount() {
         if (this.refreshTimer) clearInterval(this.refreshTimer)
+        if (this.asyncPollTimer) clearInterval(this.asyncPollTimer)
         this.clearPollTimer()
         this.clearImagePreview()
       },
@@ -776,6 +783,82 @@
         clearImagePreview() {
           this.imagePreviewUrl = ''
           this.imagePreviewMeta = ''
+        },
+
+        isScreenshotCommand(commandType) {
+          return commandType === 'app_screenshot' || commandType === 'screen_screenshot'
+        },
+
+        async pollPendingScreenshotRequests() {
+          if (!this.pendingScreenshotRequests.length || this.pendingPollBusy) {
+            return
+          }
+
+          this.pendingPollBusy = true
+          try {
+            const remain = []
+            for (const item of this.pendingScreenshotRequests) {
+              let done = false
+              try {
+                const res = await fetch(`${this.apiBase}/result?requestId=${encodeURIComponent(item.requestId)}`, {
+                  headers: this.adminToken ? { 'X-Admin-Token': this.adminToken } : {}
+                })
+                const data = await res.json()
+                const status = data?.status || ''
+
+                if (data?.success && (status === 'done' || status === 'failed' || status === 'timeout')) {
+                  this.handleAsyncScreenshotResult(item, data)
+                  done = true
+                }
+              } catch (e) {
+                // 网络瞬时错误时保留请求，下一轮继续轮询。
+              }
+
+              if (!done) {
+                const age = Date.now() - Number(item.createdAt || 0)
+                if (age < 10 * 60 * 1000) {
+                  remain.push(item)
+                }
+              }
+            }
+            this.pendingScreenshotRequests = remain
+          } finally {
+            this.pendingPollBusy = false
+          }
+        },
+
+        handleAsyncScreenshotResult(item, result) {
+          const requestId = item.requestId
+          const status = result?.status || ''
+          if (status === 'done') {
+            const respData = result?.response?.data || {}
+            const fileUrl = respData?.fileUrl || ''
+            const imageBase64 = respData?.imageBase64 || ''
+            const contentType = respData?.contentType || 'image/jpeg'
+            const width = respData?.width || 0
+            const height = respData?.height || 0
+            const captureMode = respData?.captureMode || ''
+            const message = respData?.message || respData?.msg || '截图已完成'
+            const fullFileUrl = fileUrl ? `${this.apiBase}${fileUrl}` : ''
+
+            if (fullFileUrl) {
+              this.imagePreviewUrl = fullFileUrl
+            } else if (imageBase64) {
+              this.imagePreviewUrl = `data:${contentType};base64,${imageBase64}`
+            }
+
+            this.imagePreviewMeta = `状态：ok，尺寸：${width || '-'} x ${height || '-'}，方式：${captureMode || '-'}`
+            this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            ElMessage.success(`${message}（${item.clientId}）`)
+            return
+          }
+
+          this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+          if (status === 'timeout') {
+            ElMessage.warning(`截图请求超时（${item.clientId}）`)
+          } else {
+            ElMessage.error(`截图请求失败（${item.clientId}）`)
+          }
         },
 
         metricClass(value, warn, danger) {
@@ -918,10 +1001,12 @@
           return await res.json()
         },
 
-        pollResult(requestId, onUpdate) {
+        pollResult(requestId, onUpdate, options = {}) {
           return new Promise((resolve) => {
             let count = 0
-            const maxCount = 60
+            const intervalMs = Number(options.intervalMs || 1000)
+            const maxWaitSeconds = Number(options.maxWaitSeconds || 70)
+            const maxCount = Math.max(1, Math.ceil((maxWaitSeconds * 1000) / intervalMs))
 
             this.clearPollTimer()
 
@@ -951,18 +1036,18 @@
                 this.clearPollTimer()
                 resolve(null)
               }
-            }, 1000)
+            }, intervalMs)
           })
         },
 
-        async sendAndWait(clientId, action, payload, onUpdate) {
+        async sendAndWait(clientId, action, payload, onUpdate, options = {}) {
           const sendData = await this.sendClientRequest(clientId, action, payload)
           if (!sendData.success || !sendData.requestId) {
             throw new Error(sendData.message || '发送失败')
           }
 
           const requestId = sendData.requestId
-          const result = await this.pollResult(requestId, onUpdate)
+          const result = await this.pollResult(requestId, onUpdate, options)
           return { requestId, result }
         },
 
@@ -1280,10 +1365,28 @@
           }
 
           this.commandLoading = true
-          this.commandResultText = '正在执行命令...'
+          this.commandResultText = this.isScreenshotCommand(this.commandType) ? '正在提交截图请求...' : '正在执行命令...'
           this.clearImagePreview()
 
           try {
+            if (this.isScreenshotCommand(this.commandType)) {
+              const sendData = await this.sendClientRequest(this.currentClient.clientId, action, payload)
+              if (!sendData.success || !sendData.requestId) {
+                throw new Error(sendData.message || '发送失败')
+              }
+
+              const requestId = sendData.requestId
+              this.pendingScreenshotRequests.push({
+                requestId,
+                clientId: this.currentClient.clientId,
+                commandType: this.commandType,
+                createdAt: Date.now()
+              })
+              this.commandResultText = `requestId: ${requestId}\n\n截图请求已提交，等待 Agent/Manager 完成后异步回传...`
+              ElMessage.success('截图请求已提交，结果会异步回传')
+              return
+            }
+
             const { requestId, result } = await this.sendAndWait(
               this.currentClient.clientId,
               action,

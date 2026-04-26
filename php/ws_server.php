@@ -185,6 +185,36 @@ function save_pending_request(Redis $redis, array $config, string $prefix, strin
     $redis->setex($prefix . 'request:' . $requestId, $ttl, json_encode_cn($row));
 }
 
+function resolve_request_timeout_seconds(array $config, string $action, array $payload): int
+{
+    $default = (int)($config['request_timeout_seconds'] ?? 60);
+    if ($default <= 0) {
+        $default = 60;
+    }
+
+    $screenshotTimeout = (int)($config['screenshot_request_timeout_seconds'] ?? max($default, 180));
+    if ($screenshotTimeout <= 0) {
+        $screenshotTimeout = max($default, 180);
+    }
+
+    $action = strtolower(trim($action));
+    if ($action === 'screen_screenshot' || $action === 'app_screenshot') {
+        return $screenshotTimeout;
+    }
+
+    if ($action === 'command') {
+        $command = '';
+        if (isset($payload['command'])) {
+            $command = strtolower(trim((string)$payload['command']));
+        }
+        if ($command === 'screen_screenshot' || $command === 'app_screenshot') {
+            return $screenshotTimeout;
+        }
+    }
+
+    return $default;
+}
+
 function get_request_row(Redis $redis, string $prefix, string $requestId): ?array
 {
     $json = $redis->get($prefix . 'request:' . $requestId);
@@ -606,6 +636,7 @@ $server->on('Request', function (Request $request, Response $response) use ($ser
             'clientId' => $clientId,
             'action' => $action,
             'payload' => $payload,
+            'timeoutSeconds' => resolve_request_timeout_seconds($config, $action, is_array($payload) ? $payload : []),
             'createdAt' => now_ts(),
             'updatedAt' => now_ts(),
         ];
@@ -655,7 +686,10 @@ $server->on('Request', function (Request $request, Response $response) use ($ser
 
         if (($row['status'] ?? '') === 'pending') {
             $createdAt = (int)($row['createdAt'] ?? now_ts());
-            $timeout = (int)($config['request_timeout_seconds'] ?? 60);
+            $timeout = (int)($row['timeoutSeconds'] ?? ($config['request_timeout_seconds'] ?? 60));
+            if ($timeout <= 0) {
+                $timeout = (int)($config['request_timeout_seconds'] ?? 60);
+            }
 
             if (now_ts() - $createdAt > $timeout) {
                 $row['status'] = 'timeout';
