@@ -198,7 +198,7 @@
       <div class="toolbar">
         <el-input
           v-model="keyword"
-          placeholder="搜索主机IP / 机器名 / 分组"
+          placeholder="搜索主机IP"
           clearable
           style="width: 280px"
         ></el-input>
@@ -247,22 +247,23 @@
         stripe
         v-loading="loadingClients"
         style="width: 100%"
+        :default-sort="{ prop: 'lastHeartbeat', order: 'descending' }"
       >
-        <el-table-column label="状态" width="100" align="center">
+        <el-table-column label="状态" width="100" align="center" sortable :sort-method="sortByOnline">
           <template #default="{ row }">
             <span class="status-dot" :class="row.online ? 'status-online' : 'status-offline'"></span>
             <span>{{ row.online ? '在线' : '离线' }}</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="clientId" label="主机IP / ClientId" min-width="150">
+        <el-table-column prop="clientId" label="主机IP / ClientId" min-width="150" sortable>
           <template #default="{ row }">
             <div class="ip-text">{{ row.clientId || '-' }}</div>
             <div class="muted" v-if="row.localIp && row.localIp !== row.clientId">{{ row.localIp }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="CPU" width="105" align="center">
+        <el-table-column prop="cpu" label="CPU" width="105" align="center" sortable>
           <template #default="{ row }">
             <span class="metric" :class="metricClass(row.cpu, 80, 95)">
               {{ formatPercent(row.cpu) }}
@@ -270,7 +271,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="内存" width="105" align="center">
+        <el-table-column prop="memoryUsedPercent" label="内存" width="105" align="center" sortable>
           <template #default="{ row }">
             <span class="metric" :class="metricClass(row.memoryUsedPercent, 80, 90)">
               {{ formatPercent(row.memoryUsedPercent) }}
@@ -278,7 +279,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="磁盘" min-width="210">
+        <el-table-column label="磁盘" min-width="210" sortable :sort-method="sortByDiskUsed">
           <template #default="{ row }">
             <div class="disk-list" v-if="getDisks(row).length">
               <div v-for="d in getDisks(row)" :key="d.name">
@@ -324,14 +325,14 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="最后心跳" min-width="170">
+        <el-table-column prop="lastHeartbeat" label="最后心跳" min-width="170" sortable>
           <template #default="{ row }">
             <div>{{ formatTime(row.lastHeartbeat) }}</div>
             <div class="muted">{{ ageText(row.lastHeartbeat) }}</div>
           </template>
         </el-table-column>
 
-        <el-table-column label="连接时间" min-width="170">
+        <el-table-column prop="connectedAt" label="连接时间" min-width="170" sortable>
           <template #default="{ row }">
             <div>{{ formatTime(row.connectedAt) }}</div>
           </template>
@@ -748,8 +749,7 @@
           if (!kw) return this.clients
           return this.clients.filter(x =>
             String(x.clientId || '').toLowerCase().includes(kw) ||
-            String(x.machineName || '').toLowerCase().includes(kw) ||
-            String(x.group || '').toLowerCase().includes(kw)
+            String(x.localIp || '').toLowerCase().includes(kw)
           )
         },
         onlineCount() {
@@ -895,6 +895,14 @@
           if (n >= danger) return 'metric-danger'
           if (n >= warn) return 'metric-warn'
           return 'metric-ok'
+        },
+
+        sortByOnline(a, b) {
+          return Number(!!a?.online) - Number(!!b?.online)
+        },
+
+        sortByDiskUsed(a, b) {
+          return this.maxDiskUsed(a) - this.maxDiskUsed(b)
         },
 
         formatPercent(v) {

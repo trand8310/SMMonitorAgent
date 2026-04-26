@@ -219,10 +219,10 @@ C:\ProgramData\SMMonitorAgent\status.json
 
 ```bash
 cd demo/NamedPipeClientDemo
-dotnet run -- DemoOrderApp
+dotnet run -- --app DemoOrderApp --interval 1000
 ```
 
-它会每秒向固定管道 `SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d` 写入一行 JSON（带 `app` 字段）。
+它会单向向固定管道 `SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d` 写入一行 JSON（带 `app/appName` 字段），DEMO 本身不处理任何回包。
 
 联调步骤：
 
