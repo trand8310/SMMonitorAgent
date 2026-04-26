@@ -489,9 +489,48 @@ public sealed class WsMonitorAgent
             case "pipe_live_push":
                 await HandlePipeLivePushAsync(ws, requestId, args, token);
                 return;
+            case "machine_restart":
+                await HandleMachineRestartAsync(ws, requestId, args, token);
+                return;
             default:
                 await SendResponseAsync(ws, requestId, false, $"unknown command: {command}", token);
                 return;
+        }
+    }
+
+    private async Task HandleMachineRestartAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
+    {
+        var delaySeconds = 5;
+        var reason = "remote reboot from machine_restart";
+
+        if (args.ValueKind == JsonValueKind.Object)
+        {
+            if (args.TryGetProperty("delaySeconds", out var d) && d.TryGetInt32(out var delay))
+            {
+                delaySeconds = Math.Clamp(delay, 0, 3600);
+            }
+
+            if (args.TryGetProperty("reason", out var r))
+            {
+                reason = r.GetString() ?? reason;
+            }
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "shutdown.exe",
+                Arguments = $"/r /t {delaySeconds} /c \"{reason.Replace("\"", "'")}\"",
+                CreateNoWindow = true,
+                UseShellExecute = false
+            });
+
+            await SendResponseAsync(ws, requestId, true, "machine restart command accepted", token);
+        }
+        catch (Exception ex)
+        {
+            await SendResponseAsync(ws, requestId, false, ex.Message, token);
         }
     }
 

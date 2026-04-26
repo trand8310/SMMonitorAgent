@@ -655,7 +655,7 @@
           </span>
         </div>
         <div class="inline-tip" v-if="commandType === 'agent_reboot'">
-          重启系统会发送 action=reboot，适合前面 .NET8 示例服务端客户端协议。
+          重启系统会发送 command=machine_restart，立即下发系统重启命令。
         </div>
       </template>
 
@@ -1535,8 +1535,11 @@
           let payload = { command: this.commandType, args: {} }
 
           if (this.commandType === 'agent_reboot') {
-            action = 'reboot'
-            payload = { delaySeconds: 5, reason: 'remote reboot from SMMonitor console' }
+            action = 'command'
+            payload = {
+              command: 'machine_restart',
+              args: { delaySeconds: 5, reason: 'remote reboot from SMMonitor console' }
+            }
           }
 
           if (this.commandType === 'app_start') {
