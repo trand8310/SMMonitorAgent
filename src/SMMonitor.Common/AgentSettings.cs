@@ -8,8 +8,8 @@ public sealed class AgentSettings
     public const string ManagerPipeName = "SMMANAGER_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d";
     // Service <-> Manager 命令/数据交互管道名（当前与 ManagerPipeName 复用同一条双工管道）
     public const string ServicePipeName = ManagerPipeName;
-    public string ServerUrl { get; set; } = "ws://127.0.0.1:9502";
-    public string Token { get; set; } = "your-token";
+    public string ServerUrl { get; set; } = "ws://117.21.200.221:9502";
+    public string Token { get; set; } = "ce83aaac";
     public string ClientId { get; set; } = "";
     public string Version { get; set; } = "1.0.0";
 
