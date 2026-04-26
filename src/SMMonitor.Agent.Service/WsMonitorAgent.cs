@@ -414,7 +414,7 @@ public sealed class WsMonitorAgent
     private async Task HandleAppStartAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
     {
         var name = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
-        var filePath = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("filePath", out var p) ? (p.GetString() ?? "") : "";
+        var filePath = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("filePath", out var filePathEl) ? (filePathEl.GetString() ?? "") : "";
         var appArgs = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("arguments", out var a) ? (a.GetString() ?? "") : "";
 
         if (string.IsNullOrWhiteSpace(filePath))
@@ -446,20 +446,20 @@ public sealed class WsMonitorAgent
                 UseShellExecute = true
             };
 
-            var p = Process.Start(info);
+            var startedProcess = Process.Start(info);
             await SendJsonAsync(ws, new
             {
                 type = "response",
                 requestId,
                 clientId = _settings.ClientId,
-                ok = p != null,
-                msg = p != null ? "app started" : "start failed",
+                ok = startedProcess != null,
+                msg = startedProcess != null ? "app started" : "start failed",
                 data = new
                 {
                     name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(filePath) : name,
                     filePath,
                     arguments = appArgs,
-                    processId = p?.Id ?? 0
+                    processId = startedProcess?.Id ?? 0
                 },
                 ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             }, token);
