@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace SMMonitor.Agent.Service;
@@ -5,13 +6,14 @@ namespace SMMonitor.Agent.Service;
 public sealed class ResourceCollector
 {
     private readonly DateTime _processStartTime = DateTime.Now;
+    private readonly Dictionary<string, AppCpuSample> _appCpuSamples = new(StringComparer.OrdinalIgnoreCase);
 
     private ulong _lastIdle;
     private ulong _lastKernel;
     private ulong _lastUser;
     private bool _hasCpuSample;
 
-    public MonitorSnapshot Collect(string version)
+    public MonitorSnapshot Collect(string version, IReadOnlyCollection<string>? monitoredApps = null)
     {
         var mem = NativeMethods.GetMemoryInfo();
         var disks = GetDisks();
@@ -27,7 +29,8 @@ public sealed class ResourceCollector
             MemoryAvailableMb = mem.AvailableMb,
             ProcessUptimeSeconds = (long)(DateTime.Now - _processStartTime).TotalSeconds,
             BootTime = DateTime.Now - TimeSpan.FromMilliseconds(Environment.TickCount64),
-            Disks = disks
+            Disks = disks,
+            MonitoredApps = GetMonitoredAppStatuses(monitoredApps)
         };
     }
 
@@ -102,6 +105,118 @@ public sealed class ResourceCollector
 
         return list;
     }
+
+    private List<MonitoredAppStatus> GetMonitoredAppStatuses(IReadOnlyCollection<string>? monitoredApps)
+    {
+        if (monitoredApps == null || monitoredApps.Count == 0)
+        {
+            return new List<MonitoredAppStatus>();
+        }
+
+        var list = new List<MonitoredAppStatus>();
+
+        foreach (var app in monitoredApps
+                     .Where(x => !string.IsNullOrWhiteSpace(x))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var processName = NormalizeProcessName(app);
+            Process[] matches;
+
+            try
+            {
+                matches = Process.GetProcessesByName(processName);
+            }
+            catch
+            {
+                matches = Array.Empty<Process>();
+            }
+
+            var cpuSeconds = 0d;
+            var memoryBytes = 0L;
+            var threadCount = 0;
+            var startedAt = DateTime.MinValue;
+
+            foreach (var p in matches)
+            {
+                try
+                {
+                    cpuSeconds += p.TotalProcessorTime.TotalSeconds;
+                    memoryBytes += p.WorkingSet64;
+                    threadCount += p.Threads.Count;
+
+                    var st = p.StartTime;
+                    if (startedAt == DateTime.MinValue || st < startedAt)
+                    {
+                        startedAt = st;
+                    }
+                }
+                catch
+                {
+                    // 进程瞬时退出或权限不足时忽略
+                }
+                finally
+                {
+                    p.Dispose();
+                }
+            }
+
+            list.Add(new MonitoredAppStatus
+            {
+                Name = processName,
+                IsRunning = matches.Length > 0,
+                ProcessCount = matches.Length,
+                OldestStartTime = startedAt == DateTime.MinValue ? null : startedAt,
+                TotalCpuSeconds = Math.Round(cpuSeconds, 2),
+                CpuPercent = CalculateAppCpuPercent(processName, cpuSeconds),
+                MemoryUsedMb = Math.Round(memoryBytes / 1024d / 1024d, 2),
+                ThreadCount = threadCount
+            });
+        }
+
+        return list;
+    }
+
+    private double CalculateAppCpuPercent(string processName, double totalCpuSeconds)
+    {
+        var now = DateTime.UtcNow;
+        var coreCount = Math.Max(1, Environment.ProcessorCount);
+
+        if (!_appCpuSamples.TryGetValue(processName, out var old))
+        {
+            _appCpuSamples[processName] = new AppCpuSample(totalCpuSeconds, now);
+            return 0;
+        }
+
+        var elapsed = (now - old.Timestamp).TotalSeconds;
+        if (elapsed <= 0)
+        {
+            return 0;
+        }
+
+        var delta = totalCpuSeconds - old.TotalCpuSeconds;
+        _appCpuSamples[processName] = new AppCpuSample(totalCpuSeconds, now);
+
+        if (delta <= 0)
+        {
+            return 0;
+        }
+
+        var usage = delta / elapsed / coreCount * 100d;
+        return Math.Round(Math.Clamp(usage, 0, 100), 2);
+    }
+
+    private static string NormalizeProcessName(string raw)
+    {
+        var value = raw.Trim();
+        if (value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            value = value[..^4];
+        }
+
+        return value;
+    }
+
+    private sealed record AppCpuSample(double TotalCpuSeconds, DateTime Timestamp);
 }
 
 public sealed class MonitorSnapshot
@@ -116,6 +231,7 @@ public sealed class MonitorSnapshot
     public long ProcessUptimeSeconds { get; set; }
     public DateTime BootTime { get; set; }
     public List<DiskInfo> Disks { get; set; } = new();
+    public List<MonitoredAppStatus> MonitoredApps { get; set; } = new();
 }
 
 public sealed class DiskInfo
@@ -124,6 +240,18 @@ public sealed class DiskInfo
     public double TotalGb { get; set; }
     public double FreeGb { get; set; }
     public double UsedPercent { get; set; }
+}
+
+public sealed class MonitoredAppStatus
+{
+    public string Name { get; set; } = "";
+    public bool IsRunning { get; set; }
+    public int ProcessCount { get; set; }
+    public DateTime? OldestStartTime { get; set; }
+    public double TotalCpuSeconds { get; set; }
+    public double CpuPercent { get; set; }
+    public double MemoryUsedMb { get; set; }
+    public int ThreadCount { get; set; }
 }
 
 public static class NativeMethods
