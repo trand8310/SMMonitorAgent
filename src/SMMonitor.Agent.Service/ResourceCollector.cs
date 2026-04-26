@@ -106,7 +106,7 @@ public sealed class ResourceCollector
         return list;
     }
 
-    private static List<MonitoredAppStatus> GetMonitoredAppStatuses(IReadOnlyCollection<string>? monitoredApps)
+    private List<MonitoredAppStatus> GetMonitoredAppStatuses(IReadOnlyCollection<string>? monitoredApps)
     {
         if (monitoredApps == null || monitoredApps.Count == 0)
         {
@@ -215,6 +215,8 @@ public sealed class ResourceCollector
 
         return value;
     }
+
+    private sealed record AppCpuSample(double TotalCpuSeconds, DateTime Timestamp);
 }
 
 public sealed class MonitorSnapshot
@@ -251,8 +253,6 @@ public sealed class MonitoredAppStatus
     public double MemoryUsedMb { get; set; }
     public int ThreadCount { get; set; }
 }
-
-file sealed record AppCpuSample(double TotalCpuSeconds, DateTime Timestamp);
 
 public static class NativeMethods
 {
