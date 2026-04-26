@@ -11,7 +11,7 @@ public static class ManagerScreenshotBridge
     {
         try
         {
-            var pipeName = AgentSettings.ServicePipeName;
+            var pipeName = AgentSettings.ManagerPipeName;
             await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             await pipe.ConnectAsync(1200, token);
             if (!pipe.IsConnected)

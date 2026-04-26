@@ -11,7 +11,7 @@ public static class ManagerCommandServer
 {
     public static async Task RunAsync(Action<string> log, CancellationToken token)
     {
-        var pipeName = AgentSettings.ServicePipeName;
+        var pipeName = AgentSettings.ManagerPipeName;
         while (!token.IsCancellationRequested)
         {
             try
@@ -30,11 +30,18 @@ public static class ManagerCommandServer
                 {
                     var line = await reader.ReadLineAsync(token);
                     if (line == null) break;
+
+                    if (!IsCommandRequest(line))
+                    {
+                        log(line);
+                        continue;
+                    }
+
                     var result = HandleRequest(line);
                     await writer.WriteLineAsync(JsonSerializer.Serialize(result));
-                    log(result.ok
-                        ? $"[ManagerCmd] capture ok {result.width}x{result.height}"
-                        : $"[ManagerCmd] capture failed: {result.error}");
+                    log(result.Ok
+                        ? $"[ManagerCmd] capture ok {result.Width}x{result.Height}"
+                        : $"[ManagerCmd] capture failed: {result.Error}");
                 }
             }
             catch (OperationCanceledException)
@@ -52,6 +59,21 @@ public static class ManagerCommandServer
                 log($"[ManagerCmd] loop error: {ex.Message}");
                 await Task.Delay(500, token);
             }
+        }
+    }
+
+    private static bool IsCommandRequest(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            return root.TryGetProperty("action", out var actionEl) &&
+                   !string.IsNullOrWhiteSpace(actionEl.GetString());
+        }
+        catch
+        {
+            return false;
         }
     }
 

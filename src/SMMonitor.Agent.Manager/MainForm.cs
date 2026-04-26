@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.ServiceProcess;
-using System.Text;
 using System.Text.Json;
 using SMMonitor.Common;
 
@@ -62,7 +61,6 @@ public sealed class MainForm : Form
         _timer.Tick += (_, _) => RefreshStatus();
         _timer.Start();
 
-        _ = Task.Run(() => PipeLogLoopAsync(_loopCts.Token));
         _ = Task.Run(() => ManagerCommandServer.RunAsync(AddLog, _loopCts.Token));
         InitTray();
         FormClosing += MainForm_FormClosing;
@@ -552,40 +550,6 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             MessageBox.Show("重启服务失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    private async Task PipeLogLoopAsync(CancellationToken token)
-    {
-        var pipeName = AgentSettings.ManagerPipeName;
-        while (!token.IsCancellationRequested)
-        {
-            try
-            {
-                await using var server = new NamedPipeServerStream(
-                    pipeName,
-                    PipeDirection.In,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Message,
-                    PipeOptions.Asynchronous);
-
-                await server.WaitForConnectionAsync(token);
-                using var reader = new StreamReader(server, Encoding.UTF8, true, leaveOpen: true);
-                while (!token.IsCancellationRequested && server.IsConnected)
-                {
-                    var line = await reader.ReadLineAsync(token);
-                    if (line == null) break;
-                    AddLog(line);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch
-            {
-                await Task.Delay(500, token);
-            }
         }
     }
 
