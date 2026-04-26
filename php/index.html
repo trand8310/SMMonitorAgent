@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMMonitor 客户端控制台</title>
+
+  <!-- 按你现有项目的引用路径保留 -->
+  <link rel="stylesheet" href="../libs/node_modules/element-plus/dist/index.css" />
+  <script src="../libs/node_modules/vue/dist/vue.global.prod.js"></script>
+  <script src="../libs/node_modules/element-plus/dist/index.full.min.js"></script>
+  <script src="../libs/node_modules/@element-plus/icons-vue/dist/index.iife.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f5f7fa;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      color: #303133;
+    }
+    .page { padding: 20px; }
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .title { font-size: 22px; font-weight: 700; }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .summary-card {
+      border: 1px solid #ebeef5;
+      border-radius: 10px;
+      background: #fff;
+      padding: 14px 16px;
+    }
+    .summary-title {
+      color: #909399;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .summary-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #303133;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .status-online { background: #67c23a; }
+    .status-offline { background: #f56c6c; }
+    .ip-text {
+      font-weight: 600;
+      color: #409eff;
+    }
+    .muted {
+      color: #909399;
+      font-size: 12px;
+    }
+    .metric {
+      font-weight: 700;
+      color: #303133;
+    }
+    .metric-ok { color: #67c23a; }
+    .metric-warn { color: #e6a23c; }
+    .metric-danger { color: #f56c6c; }
+    .disk-list {
+      font-size: 12px;
+      line-height: 1.7;
+      white-space: nowrap;
+    }
+    .dialog-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      width: 100%;
+    }
+    .response-box {
+      min-height: 120px;
+      max-height: 320px;
+      overflow: auto;
+      padding: 12px;
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e5e7eb;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      width: 100%;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+    }
+    .json-editor textarea {
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .action-buttons {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .result-card {
+      margin-top: 14px;
+      border: 1px solid #ebeef5;
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+    .preview-image-wrap {
+      margin-top: 10px;
+      border: 1px solid #ebeef5;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fafafa;
+      text-align: center;
+    }
+    .preview-image {
+      max-width: 100%;
+      max-height: 420px;
+      border-radius: 6px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    }
+    .command-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .inline-tip {
+      font-size: 12px;
+      color: #909399;
+      margin-top: 4px;
+    }
+    .danger-text {
+      color: #f56c6c;
+      font-weight: 600;
+    }
+    .client-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .detail-item {
+      background: #fafafa;
+      border: 1px solid #ebeef5;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .detail-label { color: #909399; font-size: 12px; margin-bottom: 5px; }
+    .detail-value { font-size: 15px; font-weight: 700; }
+    @media (max-width: 1100px) {
+      .summary-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+      .client-detail-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 900px) {
+      .command-grid { grid-template-columns: 1fr; }
+      .summary-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="page">
+    <div class="top-bar">
+      <div class="title">SMMonitor 客户端控制台</div>
+
+      <div class="toolbar">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索主机IP / 机器名 / 分组"
+          clearable
+          style="width: 280px"
+        ></el-input>
+
+        <el-switch
+          v-model="autoRefresh"
+          active-text="自动刷新"
+          inactive-text="手动刷新"
+        ></el-switch>
+
+        <el-button type="primary" @click="loadClients" :loading="loadingClients">
+          刷新列表
+        </el-button>
+      </div>
+    </div>
+
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-title">客户端总数</div>
+        <div class="summary-value">{{ clients.length }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-title">在线客户端</div>
+        <div class="summary-value metric-ok">{{ onlineCount }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-title">高内存主机</div>
+        <div class="summary-value" :class="highMemCount > 0 ? 'metric-danger' : 'metric-ok'">{{ highMemCount }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-title">高磁盘主机</div>
+        <div class="summary-value" :class="highDiskCount > 0 ? 'metric-danger' : 'metric-ok'">{{ highDiskCount }}</div>
+      </div>
+    </div>
+
+    <el-card shadow="never">
+      <el-table
+        :data="filteredClients"
+        border
+        stripe
+        v-loading="loadingClients"
+        style="width: 100%"
+      >
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <span class="status-dot" :class="row.online ? 'status-online' : 'status-offline'"></span>
+            <span>{{ row.online ? '在线' : '离线' }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="clientId" label="主机IP / ClientId" min-width="150">
+          <template #default="{ row }">
+            <div class="ip-text">{{ row.clientId || '-' }}</div>
+            <div class="muted" v-if="row.localIp && row.localIp !== row.clientId">{{ row.localIp }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="机器名" min-width="150">
+          <template #default="{ row }">
+            <div>{{ row.machineName || '-' }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="版本" min-width="100">
+          <template #default="{ row }">
+            <el-tag size="small">{{ row.version || '-' }}</el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="分组" min-width="110">
+          <template #default="{ row }">
+            <div>{{ row.group || '-' }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="CPU" width="105" align="center">
+          <template #default="{ row }">
+            <span class="metric" :class="metricClass(row.cpu, 80, 95)">
+              {{ formatPercent(row.cpu) }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="内存" width="105" align="center">
+          <template #default="{ row }">
+            <span class="metric" :class="metricClass(row.memoryUsedPercent, 80, 90)">
+              {{ formatPercent(row.memoryUsedPercent) }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="磁盘" min-width="210">
+          <template #default="{ row }">
+            <div class="disk-list" v-if="getDisks(row).length">
+              <div v-for="d in getDisks(row)" :key="d.name">
+                <span :class="metricClass(d.usedPercent, 80, 90)">
+                  {{ d.name }} {{ formatPercent(d.usedPercent) }}
+                </span>
+                <span class="muted">剩余 {{ formatGb(d.freeGb) }}</span>
+              </div>
+            </div>
+            <div v-else class="muted">-</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="最后心跳" min-width="170">
+          <template #default="{ row }">
+            <div>{{ formatTime(row.lastHeartbeat) }}</div>
+            <div class="muted">{{ ageText(row.lastHeartbeat) }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="连接时间" min-width="170">
+          <template #default="{ row }">
+            <div>{{ formatTime(row.connectedAt) }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="360" fixed="right" align="center">
+          <template #default="{ row }">
+            <div class="action-buttons">
+              <el-button size="small" @click="openDetailDialog(row)">详情</el-button>
+              <el-button size="small" @click="openSettingDialog(row)">设置</el-button>
+              <el-button size="small" type="primary" @click="openCommDialog(row)">通信</el-button>
+
+              <el-dropdown trigger="click" @command="(cmd) => handleClientAction(cmd, row)">
+                <el-button size="small" type="success">
+                  更多操作
+                  <el-icon style="margin-left:6px"><arrow-down /></el-icon>
+                </el-button>
+
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="get_config">获取配置</el-dropdown-item>
+                    <el-dropdown-item command="set_config">设置配置</el-dropdown-item>
+                    <el-dropdown-item divided command="app_start">启动应用</el-dropdown-item>
+                    <el-dropdown-item command="app_stop">停止应用</el-dropdown-item>
+                    <el-dropdown-item divided command="app_screenshot">应用截图</el-dropdown-item>
+                    <el-dropdown-item command="screen_screenshot">屏幕截图</el-dropdown-item>
+                    <el-dropdown-item divided command="machine_restart">机器重启</el-dropdown-item>
+                    <el-dropdown-item command="agent_reboot">Agent兼容重启</el-dropdown-item>
+                    <el-dropdown-item command="machine_logoff">机器注销</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="!loadingClients && filteredClients.length === 0" class="muted" style="margin-top: 12px;">
+        暂无客户端数据
+      </div>
+    </el-card>
+
+    <!-- 详情弹窗 -->
+    <el-dialog v-model="detailDialogVisible" width="900px" :title="`详情 - ${currentClient?.clientId || ''}`">
+      <div class="client-detail-grid" v-if="currentClient">
+        <div class="detail-item"><div class="detail-label">ClientId</div><div class="detail-value">{{ currentClient.clientId || '-' }}</div></div>
+        <div class="detail-item"><div class="detail-label">机器名</div><div class="detail-value">{{ currentClient.machineName || '-' }}</div></div>
+        <div class="detail-item"><div class="detail-label">版本</div><div class="detail-value">{{ currentClient.version || '-' }}</div></div>
+        <div class="detail-item"><div class="detail-label">CPU</div><div class="detail-value" :class="metricClass(currentClient.cpu,80,95)">{{ formatPercent(currentClient.cpu) }}</div></div>
+        <div class="detail-item"><div class="detail-label">内存</div><div class="detail-value" :class="metricClass(currentClient.memoryUsedPercent,80,90)">{{ formatPercent(currentClient.memoryUsedPercent) }}</div></div>
+        <div class="detail-item"><div class="detail-label">最后心跳</div><div class="detail-value">{{ formatTime(currentClient.lastHeartbeat) }}</div></div>
+      </div>
+
+      <div class="result-card">
+        <div style="margin-bottom:8px;font-weight:600;">原始数据</div>
+        <div class="response-box">{{ prettyJson(currentClient || {}) }}</div>
+      </div>
+    </el-dialog>
+
+    <!-- 设置弹窗：通用 JSON 配置，兼容 get_config / set_config -->
+    <el-dialog
+      v-model="settingDialogVisible"
+      width="960px"
+      :title="`设置 - ${currentClient?.clientId || ''}`"
+    >
+      <el-form label-width="110px">
+        <el-form-item label="目标客户机">
+          <el-input :model-value="currentClient?.clientId || ''" disabled></el-input>
+        </el-form-item>
+
+        <el-alert
+          title="这里使用通用 JSON 配置编辑器。客户端返回什么配置，就按 JSON 显示；保存时原样通过 set_config 下发。"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 12px;"
+        ></el-alert>
+
+        <el-form-item label="配置JSON">
+          <el-input
+            class="json-editor"
+            v-model="configJsonText"
+            type="textarea"
+            :rows="18"
+            placeholder="点击 获取配置，或直接粘贴 JSON 后保存"
+          ></el-input>
+        </el-form-item>
+
+        <el-form-item label="配置结果">
+          <div class="response-box">{{ settingResultText || '暂无结果' }}</div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="settingDialogVisible = false">关闭</el-button>
+          <el-button :loading="settingLoading" @click="fetchClientConfig">获取配置</el-button>
+          <el-button type="primary" :loading="settingSaving" @click="saveClientConfig">保存配置</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 通信弹窗 -->
+    <el-dialog
+      v-model="commDialogVisible"
+      width="720px"
+      :title="`通信 - ${currentClient?.clientId || ''}`"
+    >
+      <el-form label-width="90px">
+        <el-form-item label="目标客户机">
+          <el-input :model-value="currentClient?.clientId || ''" disabled></el-input>
+        </el-form-item>
+
+        <el-form-item label="发送消息">
+          <el-input
+            v-model="commForm.text"
+            type="textarea"
+            :rows="4"
+            placeholder="请输入要发送给客户机的消息"
+          ></el-input>
+        </el-form-item>
+
+        <el-form-item label="通信结果">
+          <div class="response-box">{{ commResultText || '暂无结果' }}</div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="commDialogVisible = false">关闭</el-button>
+          <el-button type="primary" :loading="sending" @click="sendMessageToClient">
+            发送消息
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 命令弹窗 -->
+    <el-dialog
+      v-model="commandDialogVisible"
+      width="820px"
+      :title="`${commandDialogTitle} - ${currentClient?.clientId || ''}`"
+    >
+      <template v-if="commandType === 'app_start'">
+        <el-form label-width="110px">
+          <div class="command-grid">
+            <el-form-item label="应用名称">
+              <el-input v-model="commandForm.appStart.name" placeholder="例如：notepad"></el-input>
+            </el-form-item>
+
+            <el-form-item label="启动参数">
+              <el-input v-model="commandForm.appStart.arguments" placeholder="可留空"></el-input>
+            </el-form-item>
+          </div>
+
+          <el-form-item label="应用路径">
+            <el-input
+              v-model="commandForm.appStart.filePath"
+              placeholder="例如：C:\Windows\System32\notepad.exe"
+            ></el-input>
+            <div class="inline-tip">建议填写完整 exe 路径，成功率更高。</div>
+          </el-form-item>
+        </el-form>
+      </template>
+
+      <template v-if="commandType === 'app_stop'">
+        <el-form label-width="110px">
+          <div class="command-grid">
+            <el-form-item label="应用名称">
+              <el-input v-model="commandForm.appStop.name" placeholder="例如：notepad"></el-input>
+            </el-form-item>
+
+            <el-form-item label="进程ID">
+              <el-input-number v-model="commandForm.appStop.processId" :min="0" :step="1" style="width: 220px"></el-input-number>
+            </el-form-item>
+          </div>
+          <div class="inline-tip">应用名称和进程ID至少填写一个。填写进程ID时优先按进程ID停止。</div>
+        </el-form>
+      </template>
+
+      <template v-if="commandType === 'app_screenshot' || commandType === 'screen_screenshot'">
+        <el-alert
+          :title="commandType === 'app_screenshot' ? '将请求客户机返回应用截图' : '将请求客户机返回屏幕截图'"
+          type="info"
+          :closable="false"
+          show-icon
+        ></el-alert>
+
+        <div v-if="imagePreviewUrl" class="preview-image-wrap">
+          <img :src="imagePreviewUrl" class="preview-image" />
+          <div class="inline-tip" style="margin-top: 10px;">
+            {{ imagePreviewMeta }}
+          </div>
+        </div>
+      </template>
+
+      <template v-if="commandType === 'machine_restart' || commandType === 'machine_logoff' || commandType === 'agent_reboot'">
+        <el-alert
+          :title="commandType === 'machine_logoff' ? '你正在对该客户机执行注销操作' : '你正在对该客户机执行重启操作'"
+          type="warning"
+          :closable="false"
+          show-icon
+        ></el-alert>
+        <div style="margin-top: 12px;">
+          <span class="danger-text">
+            {{ commandType === 'machine_logoff' ? '确认后客户机当前登录用户将被注销。' : '确认后客户机将执行重启命令。' }}
+          </span>
+        </div>
+        <div class="inline-tip" v-if="commandType === 'agent_reboot'">
+          Agent兼容重启会发送 action=reboot，适合前面 .NET8 示例服务端客户端协议。
+        </div>
+      </template>
+
+      <div class="result-card">
+        <div style="margin-bottom: 8px; font-weight: 600;">执行结果</div>
+        <div class="response-box">{{ commandResultText || '暂无结果' }}</div>
+      </div>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="commandDialogVisible = false">关闭</el-button>
+          <el-button type="primary" :loading="commandLoading" @click="submitCommand">
+            执行
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+  </div>
+
+  <script>
+    const { createApp } = Vue
+    const { ElMessage, ElMessageBox } = ElementPlus
+
+    const app = createApp({
+      data() {
+        return {
+          // 默认自动使用当前域名 + 9502。需要固定服务器时，也可改成：'http://117.21.200.221:9502'
+          apiBase: window.SM_MONITOR_API_BASE || `${location.protocol}//${location.hostname}:9502`,
+          adminToken: window.SM_MONITOR_ADMIN_TOKEN || '',
+
+          loadingClients: false,
+          clients: [],
+          keyword: '',
+          autoRefresh: true,
+          refreshTimer: null,
+
+          detailDialogVisible: false,
+          settingDialogVisible: false,
+          commDialogVisible: false,
+          commandDialogVisible: false,
+          currentClient: null,
+
+          commForm: { text: '' },
+          commResultText: '',
+          sending: false,
+
+          settingLoading: false,
+          settingSaving: false,
+          settingResultText: '',
+          configJsonText: '',
+
+          commandType: '',
+          commandDialogTitle: '',
+          commandLoading: false,
+          commandResultText: '',
+          imagePreviewUrl: '',
+          imagePreviewMeta: '',
+          commandForm: {
+            appStart: { name: '', filePath: '', arguments: '' },
+            appStop: { name: '', processId: 0 }
+          },
+
+          pollTimer: null
+        }
+      },
+
+      computed: {
+        filteredClients() {
+          const kw = (this.keyword || '').trim().toLowerCase()
+          if (!kw) return this.clients
+          return this.clients.filter(x =>
+            String(x.clientId || '').toLowerCase().includes(kw) ||
+            String(x.machineName || '').toLowerCase().includes(kw) ||
+            String(x.group || '').toLowerCase().includes(kw)
+          )
+        },
+        onlineCount() {
+          return this.clients.filter(x => x.online).length
+        },
+        highMemCount() {
+          return this.clients.filter(x => Number(x.memoryUsedPercent || 0) >= 90).length
+        },
+        highDiskCount() {
+          return this.clients.filter(x => this.maxDiskUsed(x) >= 90).length
+        }
+      },
+
+      mounted() {
+        this.loadClients()
+        this.refreshTimer = setInterval(() => {
+          if (this.autoRefresh) this.loadClients(false)
+        }, 5000)
+      },
+
+      beforeUnmount() {
+        if (this.refreshTimer) clearInterval(this.refreshTimer)
+        this.clearPollTimer()
+        this.clearImagePreview()
+      },
+
+      methods: {
+        requestHeaders() {
+          const headers = { 'Content-Type': 'application/json' }
+          if (this.adminToken) headers['X-Admin-Token'] = this.adminToken
+          return headers
+        },
+
+        clearPollTimer() {
+          if (this.pollTimer) {
+            clearInterval(this.pollTimer)
+            this.pollTimer = null
+          }
+        },
+
+        clearImagePreview() {
+          this.imagePreviewUrl = ''
+          this.imagePreviewMeta = ''
+        },
+
+        metricClass(value, warn, danger) {
+          const n = Number(value)
+          if (!Number.isFinite(n)) return ''
+          if (n >= danger) return 'metric-danger'
+          if (n >= warn) return 'metric-warn'
+          return 'metric-ok'
+        },
+
+        formatPercent(v) {
+          const n = Number(v)
+          if (!Number.isFinite(n)) return '-'
+          return `${n.toFixed(1)}%`
+        },
+
+        formatGb(v) {
+          const n = Number(v)
+          if (!Number.isFinite(n)) return '-'
+          return `${n.toFixed(1)}GB`
+        },
+
+        getDisks(row) {
+          const disks = row?.disks || row?.payload?.disks || row?.payload?.Disks || []
+          return Array.isArray(disks) ? disks : []
+        },
+
+        maxDiskUsed(row) {
+          const disks = this.getDisks(row)
+          if (!disks.length) return 0
+          return Math.max(...disks.map(x => Number(x.usedPercent ?? x.UsedPercent ?? 0)))
+        },
+
+        formatTime(ts) {
+          if (!ts) return '-'
+          const d = new Date(Number(ts) * 1000)
+          if (Number.isNaN(d.getTime())) return '-'
+          const y = d.getFullYear()
+          const m = String(d.getMonth() + 1).padStart(2, '0')
+          const day = String(d.getDate()).padStart(2, '0')
+          const h = String(d.getHours()).padStart(2, '0')
+          const i = String(d.getMinutes()).padStart(2, '0')
+          const s = String(d.getSeconds()).padStart(2, '0')
+          return `${y}-${m}-${day} ${h}:${i}:${s}`
+        },
+
+        ageText(ts) {
+          if (!ts) return '-'
+          const diff = Math.max(0, Math.floor(Date.now() / 1000 - Number(ts)))
+          if (diff < 60) return `${diff}秒前`
+          if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
+          return `${Math.floor(diff / 3600)}小时前`
+        },
+
+        prettyJson(obj) {
+          try {
+            return JSON.stringify(obj, null, 2)
+          } catch (e) {
+            return String(obj)
+          }
+        },
+
+        parseConfig(config) {
+          if (!config) return null
+          let obj = config
+          if (typeof obj === 'string') {
+            try {
+              obj = JSON.parse(obj)
+            } catch (e) {
+              return null
+            }
+          }
+          return obj && typeof obj === 'object' ? obj : null
+        },
+
+        async loadClients(showLoading = true) {
+          if (showLoading) this.loadingClients = true
+          try {
+            const res = await fetch(`${this.apiBase}/online`, {
+              method: 'GET',
+              headers: this.adminToken ? { 'X-Admin-Token': this.adminToken } : {}
+            })
+            const data = await res.json()
+
+            if (!data.success) {
+              ElMessage.error(data.message || '获取客户端列表失败')
+              return
+            }
+
+            this.clients = Array.isArray(data.clients) ? data.clients : (data.data || [])
+          } catch (err) {
+            ElMessage.error('获取客户端列表失败')
+            console.error(err)
+          } finally {
+            this.loadingClients = false
+          }
+        },
+
+        async sendClientRequest(clientId, action, payload) {
+          const res = await fetch(`${this.apiBase}/send`, {
+            method: 'POST',
+            headers: this.requestHeaders(),
+            body: JSON.stringify({ clientId, action, payload })
+          })
+          return await res.json()
+        },
+
+        pollResult(requestId, onUpdate) {
+          return new Promise((resolve) => {
+            let count = 0
+            const maxCount = 60
+
+            this.clearPollTimer()
+
+            this.pollTimer = setInterval(async () => {
+              count++
+              try {
+                const res = await fetch(`${this.apiBase}/result?requestId=${encodeURIComponent(requestId)}`, {
+                  headers: this.adminToken ? { 'X-Admin-Token': this.adminToken } : {}
+                })
+                const data = await res.json()
+
+                if (typeof onUpdate === 'function') {
+                  onUpdate(data)
+                }
+
+                if (data.success && (data.status === 'done' || data.status === 'timeout' || data.status === 'failed')) {
+                  this.clearPollTimer()
+                  resolve(data)
+                  return
+                }
+
+                if (count >= maxCount) {
+                  this.clearPollTimer()
+                  resolve(null)
+                }
+              } catch (err) {
+                this.clearPollTimer()
+                resolve(null)
+              }
+            }, 1000)
+          })
+        },
+
+        async sendAndWait(clientId, action, payload, onUpdate) {
+          const sendData = await this.sendClientRequest(clientId, action, payload)
+          if (!sendData.success || !sendData.requestId) {
+            throw new Error(sendData.message || '发送失败')
+          }
+
+          const requestId = sendData.requestId
+          const result = await this.pollResult(requestId, onUpdate)
+          return { requestId, result }
+        },
+
+        openDetailDialog(row) {
+          this.currentClient = row
+          this.detailDialogVisible = true
+        },
+
+        openSettingDialog(row) {
+          this.currentClient = row
+          this.settingDialogVisible = true
+          this.settingResultText = ''
+          this.configJsonText = ''
+          this.clearPollTimer()
+        },
+
+        async fetchClientConfig() {
+          if (!this.currentClient?.clientId) {
+            ElMessage.warning('未选择客户机')
+            return
+          }
+
+          this.settingLoading = true
+          this.settingResultText = '正在获取配置...'
+
+          try {
+            const sendData = await this.sendClientRequest(this.currentClient.clientId, 'get_config', {})
+
+            if (!sendData.success || !sendData.requestId) {
+              throw new Error(sendData.message || '发送失败')
+            }
+
+            const requestId = sendData.requestId
+
+            const result = await this.pollResult(requestId, (data) => {
+              this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+            })
+
+            if (!result) {
+              this.settingResultText = `requestId: ${requestId}\n\n查询超时，请稍后重试`
+              ElMessage.warning('获取配置超时')
+              return
+            }
+
+            const rawConfig =
+              result?.response?.data?.config ??
+              result?.response?.data?.data?.config ??
+              result?.response?.data ??
+              result?.response
+
+            const config = this.parseConfig(rawConfig)
+
+            if (result.success && result.status === 'done') {
+              if (config) {
+                this.configJsonText = this.prettyJson(config)
+                this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(config)}`
+                ElMessage.success('获取配置成功')
+              } else {
+                this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+                ElMessage.warning('已收到响应，但未识别到有效配置对象')
+              }
+            } else if (result.success && result.status === 'timeout') {
+              this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+              ElMessage.warning('获取配置超时')
+            } else {
+              this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+              ElMessage.error('获取配置失败')
+            }
+          } catch (err) {
+            this.settingResultText = String(err)
+            ElMessage.error(err.message || '获取配置失败')
+          } finally {
+            this.settingLoading = false
+          }
+        },
+
+        async saveClientConfig() {
+          if (!this.currentClient?.clientId) {
+            ElMessage.warning('未选择客户机')
+            return
+          }
+
+          let payload
+          try {
+            payload = this.configJsonText.trim() ? JSON.parse(this.configJsonText) : {}
+          } catch (e) {
+            ElMessage.error('配置不是合法 JSON')
+            return
+          }
+
+          this.settingSaving = true
+          this.settingResultText = '正在保存配置...'
+
+          try {
+            const sendData = await this.sendClientRequest(this.currentClient.clientId, 'set_config', payload)
+
+            if (!sendData.success || !sendData.requestId) {
+              throw new Error(sendData.message || '发送失败')
+            }
+
+            const requestId = sendData.requestId
+
+            const result = await this.pollResult(requestId, (data) => {
+              this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+            })
+
+            if (!result) {
+              this.settingResultText = `requestId: ${requestId}\n\n查询超时，请稍后重试`
+              ElMessage.warning('保存配置超时')
+              return
+            }
+
+            this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+
+            if (result.success && result.status === 'done') {
+              ElMessage.success('保存配置成功')
+            } else if (result.success && result.status === 'timeout') {
+              ElMessage.warning('保存配置超时')
+            } else {
+              ElMessage.error('保存配置失败')
+            }
+          } catch (err) {
+            this.settingResultText = String(err)
+            ElMessage.error(err.message || '保存配置失败')
+          } finally {
+            this.settingSaving = false
+          }
+        },
+
+        openCommDialog(row) {
+          this.currentClient = row
+          this.commDialogVisible = true
+          this.commForm.text = ''
+          this.commResultText = ''
+          this.clearPollTimer()
+        },
+
+        async sendMessageToClient() {
+          if (!this.currentClient?.clientId) {
+            ElMessage.warning('未选择客户机')
+            return
+          }
+
+          const text = (this.commForm.text || '').trim()
+          if (!text) {
+            ElMessage.warning('请输入消息内容')
+            return
+          }
+
+          this.sending = true
+          this.commResultText = '正在发送...'
+
+          try {
+            const { requestId, result } = await this.sendAndWait(
+              this.currentClient.clientId,
+              'show_message',
+              { text },
+              (data) => {
+                this.commResultText = this.prettyJson(data)
+              }
+            )
+
+            if (!result) {
+              this.commResultText = `requestId: ${requestId}\n\n查询超时，请稍后重试`
+              ElMessage.warning('查询超时，请稍后重试')
+              return
+            }
+
+            if (result.success && result.status === 'done') {
+              ElMessage.success('客户机响应成功')
+            } else if (result.success && result.status === 'timeout') {
+              ElMessage.warning('客户机响应超时')
+            }
+          } catch (err) {
+            this.commResultText = String(err)
+            ElMessage.error(err.message || '发送失败')
+          } finally {
+            this.sending = false
+          }
+        },
+
+        handleClientAction(command, row) {
+          this.currentClient = row
+
+          if (command === 'get_config') {
+            this.openSettingDialog(row)
+            this.$nextTick(() => this.fetchClientConfig())
+            return
+          }
+
+          if (command === 'set_config') {
+            this.openSettingDialog(row)
+            return
+          }
+
+          const titleMap = {
+            app_start: '启动应用',
+            app_stop: '停止应用',
+            app_screenshot: '应用截图',
+            screen_screenshot: '屏幕截图',
+            machine_restart: '机器重启',
+            agent_reboot: 'Agent兼容重启',
+            machine_logoff: '机器注销'
+          }
+
+          this.commandType = command
+          this.commandDialogTitle = titleMap[command] || '命令执行'
+          this.commandDialogVisible = true
+          this.commandResultText = ''
+          this.clearPollTimer()
+          this.clearImagePreview()
+
+          if (command === 'app_start') {
+            this.commandForm.appStart = { name: '', filePath: '', arguments: '' }
+          }
+
+          if (command === 'app_stop') {
+            this.commandForm.appStop = { name: '', processId: 0 }
+          }
+        },
+
+        async submitCommand() {
+          if (!this.currentClient?.clientId) {
+            ElMessage.warning('未选择客户机')
+            return
+          }
+
+          if (!this.commandType) {
+            ElMessage.warning('未选择命令')
+            return
+          }
+
+          if (['machine_restart', 'machine_logoff', 'agent_reboot'].includes(this.commandType)) {
+            try {
+              await ElMessageBox.confirm(
+                `确认要对客户机 ${this.currentClient.clientId} 执行 ${this.commandDialogTitle} 吗？`,
+                '危险操作确认',
+                { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' }
+              )
+            } catch {
+              return
+            }
+          }
+
+          let action = 'command'
+          let payload = { command: this.commandType, args: {} }
+
+          if (this.commandType === 'agent_reboot') {
+            action = 'reboot'
+            payload = { delaySeconds: 5, reason: 'remote reboot from SMMonitor console' }
+          }
+
+          if (this.commandType === 'app_start') {
+            const filePath = (this.commandForm.appStart.filePath || '').trim()
+            if (!filePath) {
+              ElMessage.warning('请填写应用路径')
+              return
+            }
+
+            payload.args = {
+              name: (this.commandForm.appStart.name || '').trim(),
+              filePath,
+              arguments: (this.commandForm.appStart.arguments || '').trim()
+            }
+          }
+
+          if (this.commandType === 'app_stop') {
+            const name = (this.commandForm.appStop.name || '').trim()
+            const processId = Number(this.commandForm.appStop.processId || 0)
+
+            if (!name && !processId) {
+              ElMessage.warning('应用名称和进程ID至少填写一个')
+              return
+            }
+
+            payload.args = { name, processId }
+          }
+
+          this.commandLoading = true
+          this.commandResultText = '正在执行命令...'
+          this.clearImagePreview()
+
+          try {
+            const { requestId, result } = await this.sendAndWait(
+              this.currentClient.clientId,
+              action,
+              payload,
+              (data) => {
+                this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+              }
+            )
+
+            if (!result) {
+              this.commandResultText = `requestId: ${requestId}\n\n查询超时，请稍后重试`
+              ElMessage.warning('命令执行查询超时')
+              return
+            }
+
+            this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+
+            if (result.success && result.status === 'done') {
+              const respData = result?.response?.data || {}
+              const fileUrl = respData?.fileUrl || ''
+              const imageBase64 = respData?.imageBase64 || ''
+              const contentType = respData?.contentType || 'image/jpeg'
+              const width = respData?.width || 0
+              const height = respData?.height || 0
+              const captureMode = respData?.captureMode || ''
+              const status = respData?.status || ''
+              const message = respData?.message || respData?.msg || '执行成功'
+              const fullFileUrl = fileUrl ? `${this.apiBase}${fileUrl}` : ''
+
+              if (this.commandType === 'app_screenshot' || this.commandType === 'screen_screenshot') {
+                if (fullFileUrl) {
+                  this.imagePreviewUrl = fullFileUrl
+                } else if (imageBase64) {
+                  this.imagePreviewUrl = `data:${contentType};base64,${imageBase64}`
+                }
+
+                this.imagePreviewMeta =
+                  `状态：${status || 'ok'}，尺寸：${width || '-'} x ${height || '-'}，方式：${captureMode || '-'}`
+              }
+
+              ElMessage.success(message || '命令执行成功')
+            } else if (result.success && result.status === 'timeout') {
+              ElMessage.warning('命令执行超时')
+            } else {
+              ElMessage.error('命令执行失败')
+            }
+          } catch (err) {
+            this.commandResultText = String(err)
+            ElMessage.error(err.message || '命令执行失败')
+          } finally {
+            this.commandLoading = false
+          }
+        }
+      }
+    })
+
+    for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+      app.component(key, component)
+    }
+
+    app.use(ElementPlus)
+    app.mount('#app')
+  </script>
+</body>
+</html>
