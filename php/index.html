@@ -481,12 +481,21 @@
         </el-form-item>
 
         <el-alert
-          title="当前页面仅支持读取配置（get_config），未实现的配置下发功能已移除。"
+          title="支持读取与下发监控应用配置（规则同 Manager：名称|路径|参数）"
           type="info"
           :closable="false"
           show-icon
           style="margin-bottom: 12px;"
         ></el-alert>
+
+        <el-form-item label="监控应用">
+          <el-input
+            v-model="settingMonitoredAppsText"
+            type="textarea"
+            :rows="6"
+            placeholder="每行：名称|完整EXE路径|参数；路径可留空"
+          ></el-input>
+        </el-form-item>
 
         <el-form-item label="配置JSON">
           <el-input
@@ -507,6 +516,7 @@
         <div class="dialog-footer">
           <el-button @click="settingDialogVisible = false">关闭</el-button>
           <el-button :loading="settingLoading" @click="fetchClientConfig">获取配置</el-button>
+          <el-button type="primary" :loading="settingLoading" @click="saveMonitoredAppsConfig">保存监控应用</el-button>
         </div>
       </template>
     </el-dialog>
@@ -694,6 +704,7 @@
           settingLoading: false,
           settingResultText: '',
           configJsonText: '',
+          settingMonitoredAppsText: '',
 
           commandType: '',
           commandDialogTitle: '',
@@ -958,6 +969,52 @@
           return obj && typeof obj === 'object' ? obj : null
         },
 
+        buildMonitoredAppLinesFromConfig(config) {
+          if (!config || typeof config !== 'object') return ''
+          const profiles = Array.isArray(config.monitoredAppProfiles) ? config.monitoredAppProfiles : []
+          if (profiles.length) {
+            return profiles
+              .map(p => {
+                const name = (p?.name || '').trim()
+                const filePath = (p?.filePath || '').trim()
+                const args = (p?.arguments || '').trim()
+                if (!name && !filePath) return ''
+                return `${name}|${filePath}|${args}`.replace(/\|+$/g, '')
+              })
+              .filter(Boolean)
+              .join('\n')
+          }
+
+          const names = Array.isArray(config.monitoredApps) ? config.monitoredApps : []
+          return names.map(x => String(x || '').trim()).filter(Boolean).join('\n')
+        },
+
+        parseMonitoredAppLines(raw) {
+          const profiles = []
+          const names = new Set()
+          String(raw || '')
+            .split(/\r?\n/)
+            .map(x => x.trim())
+            .filter(Boolean)
+            .forEach(line => {
+              const parts = line.split('|')
+              const name = (parts[0] || '').trim()
+              const filePath = (parts[1] || '').trim()
+              const argumentsText = (parts[2] || '').trim()
+              if (!name && !filePath) return
+
+              const profileName = name || (filePath.split(/[\\/]/).pop() || '').replace(/\.exe$/i, '')
+              if (!profileName) return
+              names.add(profileName)
+              profiles.push({ name: profileName, filePath, arguments: argumentsText })
+            })
+
+          return {
+            monitoredApps: Array.from(names),
+            monitoredAppProfiles: profiles
+          }
+        },
+
         async loadClients(showLoading = true) {
           if (showLoading) this.loadingClients = true
           try {
@@ -1173,6 +1230,7 @@
           this.settingDialogVisible = true
           this.settingResultText = ''
           this.configJsonText = ''
+          this.settingMonitoredAppsText = ''
           this.clearPollTimer()
         },
 
@@ -1205,6 +1263,7 @@
             }
 
             const rawConfig =
+              result?.response?.payload ??
               result?.response?.data?.config ??
               result?.response?.data?.data?.config ??
               result?.response?.data ??
@@ -1215,6 +1274,7 @@
             if (result.success && result.status === 'done') {
               if (config) {
                 this.configJsonText = this.prettyJson(config)
+                this.settingMonitoredAppsText = this.buildMonitoredAppLinesFromConfig(config)
                 this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(config)}`
                 ElMessage.success('获取配置成功')
               } else {
@@ -1231,6 +1291,46 @@
           } catch (err) {
             this.settingResultText = String(err)
             ElMessage.error(err.message || '获取配置失败')
+          } finally {
+            this.settingLoading = false
+          }
+        },
+
+        async saveMonitoredAppsConfig() {
+          if (!this.currentClient?.clientId) {
+            ElMessage.warning('未选择客户机')
+            return
+          }
+
+          this.settingLoading = true
+          this.settingResultText = '正在保存监控应用配置...'
+          try {
+            const parsed = this.parseMonitoredAppLines(this.settingMonitoredAppsText)
+            const { requestId, result } = await this.sendAndWait(
+              this.currentClient.clientId,
+              'set_config',
+              { config: parsed },
+              (data) => {
+                this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+              }
+            )
+
+            if (!result) {
+              this.settingResultText = `requestId: ${requestId}\n\n查询超时，请稍后重试`
+              ElMessage.warning('保存配置超时')
+              return
+            }
+
+            this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
+            if (result.success && result.status === 'done') {
+              ElMessage.success('监控应用配置已下发并保存')
+              this.loadClients(false)
+            } else {
+              ElMessage.warning('配置下发返回异常')
+            }
+          } catch (err) {
+            this.settingResultText = String(err)
+            ElMessage.error(err.message || '保存配置失败')
           } finally {
             this.settingLoading = false
           }

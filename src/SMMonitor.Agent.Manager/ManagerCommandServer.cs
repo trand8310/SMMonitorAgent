@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO.Pipes;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using SMMonitor.Common;
@@ -37,11 +38,21 @@ public static class ManagerCommandServer
                         continue;
                     }
 
+                    var action = ExtractAction(line);
                     var result = HandleRequest(line);
                     await writer.WriteLineAsync(JsonSerializer.Serialize(result));
-                    log(result.Ok
-                        ? $"[ManagerCmd] capture ok {result.Width}x{result.Height}"
-                        : $"[ManagerCmd] capture failed: {result.Error}");
+                    if (string.Equals(action, "start_process", StringComparison.OrdinalIgnoreCase))
+                    {
+                        log(result.Ok
+                            ? $"[ManagerCmd] start_process ok pid={result.ProcessId}"
+                            : $"[ManagerCmd] start_process failed: {result.Error}");
+                    }
+                    else
+                    {
+                        log(result.Ok
+                            ? $"[ManagerCmd] capture ok {result.Width}x{result.Height}"
+                            : $"[ManagerCmd] capture failed: {result.Error}");
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -77,6 +88,20 @@ public static class ManagerCommandServer
         }
     }
 
+    private static string ExtractAction(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            return root.TryGetProperty("action", out var actionEl) ? (actionEl.GetString() ?? "") : "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
     private static ManagerCaptureResponse HandleRequest(string line)
     {
         try
@@ -84,19 +109,51 @@ public static class ManagerCommandServer
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
             var action = root.TryGetProperty("action", out var actionEl) ? (actionEl.GetString() ?? "") : "";
-            if (!string.Equals(action, "capture_screen", StringComparison.OrdinalIgnoreCase))
+            return action.ToLowerInvariant() switch
             {
-                return ManagerCaptureResponse.Fail($"unsupported action: {action}");
-            }
-
-            var imageFormat = root.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg";
-            var quality = root.TryGetProperty("quality", out var q) && q.TryGetInt32(out var qv) ? Math.Clamp(qv, 30, 100) : 70;
-            return CapturePrimaryScreen(imageFormat, quality);
+                "capture_screen" => CapturePrimaryScreen(
+                    root.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg",
+                    root.TryGetProperty("quality", out var q) && q.TryGetInt32(out var qv) ? Math.Clamp(qv, 30, 100) : 70),
+                "start_process" => StartProcessInManagerSession(
+                    root.TryGetProperty("filePath", out var fp) ? (fp.GetString() ?? "") : "",
+                    root.TryGetProperty("arguments", out var arg) ? (arg.GetString() ?? "") : ""),
+                _ => ManagerCaptureResponse.Fail($"unsupported action: {action}")
+            };
         }
         catch (Exception ex)
         {
             return ManagerCaptureResponse.Fail(ex.Message);
         }
+    }
+
+    private static ManagerCaptureResponse StartProcessInManagerSession(string filePath, string arguments)
+    {
+        filePath = (filePath ?? "").Trim();
+        if (filePath.Length == 0)
+        {
+            return ManagerCaptureResponse.Fail("filePath required");
+        }
+
+        var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = filePath,
+            Arguments = arguments ?? "",
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(filePath) ?? Environment.CurrentDirectory
+        });
+
+        if (process == null)
+        {
+            return ManagerCaptureResponse.Fail("start process failed");
+        }
+
+        return new ManagerCaptureResponse
+        {
+            Ok = true,
+            Error = null,
+            Message = "started in manager session",
+            ProcessId = process.Id
+        };
     }
 
     private static ManagerCaptureResponse CapturePrimaryScreen(string imageFormat, int jpegQuality)
@@ -168,6 +225,8 @@ public sealed class ManagerCaptureResponse
 {
     public bool Ok { get; set; }
     public string? Error { get; set; }
+    public string? Message { get; set; }
+    public int ProcessId { get; set; }
     public string ContentType { get; set; } = "image/jpeg";
     public string ImageBase64 { get; set; } = "";
     public int Width { get; set; }

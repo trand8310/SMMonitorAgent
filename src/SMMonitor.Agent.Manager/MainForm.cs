@@ -151,7 +151,7 @@ public sealed class MainForm : Form
         AddRow(monitor, "磁盘阈值 %", _numDisk);
         _txtMonitoredApps.Multiline = true;
         _txtMonitoredApps.ScrollBars = ScrollBars.Vertical;
-        AddRow(monitor, "监控应用(每行: 名称|路径|参数)", _txtMonitoredApps, 180);
+        AddRow(monitor, "监控应用(每行: 名称|完整EXE路径|参数；路径可留空)", _txtMonitoredApps, 180);
         _chkAutoCaptureOnFailure.Text = "应用异常时自动截图并随告警上报";
         AddRow(monitor, "异常截图", _chkAutoCaptureOnFailure);
         _chkEnablePipeForward.Text = "启用应用命名管道消息转发";

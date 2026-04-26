@@ -288,6 +288,9 @@ public sealed class WsMonitorAgent
                             _settings.EnableRemoteReboot,
                             _settings.EnablePipeForward,
                             _settings.AppPipeName,
+                            _settings.AutoCaptureScreenshotOnAppFailure,
+                            _settings.MonitoredApps,
+                            _settings.MonitoredAppProfiles,
                             PipeLivePushEnabled = _pipeLivePushEnabled,
                             PipeLivePushApp = _pipeLivePushApp,
                             _settings.CpuAlertPercent,
@@ -296,6 +299,10 @@ public sealed class WsMonitorAgent
                         },
                         ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
                     }, token);
+                    break;
+
+                case "set_config":
+                    await HandleSetConfigAsync(ws, requestId, root, token);
                     break;
 
                 case "reboot":
@@ -327,6 +334,95 @@ public sealed class WsMonitorAgent
         {
             _logger.LogError(ex, "Handle server message failed. Raw={Json}", json);
         }
+    }
+
+    private async Task HandleSetConfigAsync(ClientWebSocket ws, string requestId, JsonElement root, CancellationToken token)
+    {
+        if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
+        {
+            await SendResponseAsync(ws, requestId, false, "payload required", token);
+            return;
+        }
+
+        var cfgEl = payload;
+        if (payload.TryGetProperty("config", out var configNode) && configNode.ValueKind == JsonValueKind.Object)
+        {
+            cfgEl = configNode;
+        }
+
+        try
+        {
+            _settings.MonitoredApps = ReadStringList(cfgEl, "monitoredApps", _settings.MonitoredApps);
+            _settings.MonitoredAppProfiles = ReadProfiles(cfgEl, "monitoredAppProfiles", _settings.MonitoredAppProfiles);
+            _settings.AutoCaptureScreenshotOnAppFailure = ReadBool(cfgEl, "autoCaptureScreenshotOnAppFailure", _settings.AutoCaptureScreenshotOnAppFailure);
+            _settings.EnablePipeForward = ReadBool(cfgEl, "enablePipeForward", _settings.EnablePipeForward);
+
+            AgentConfigStore.Save(_settings);
+
+            await SendJsonAsync(ws, new
+            {
+                type = "response",
+                requestId,
+                clientId = _settings.ClientId,
+                ok = true,
+                msg = "config updated",
+                data = new
+                {
+                    _settings.MonitoredApps,
+                    _settings.MonitoredAppProfiles,
+                    _settings.AutoCaptureScreenshotOnAppFailure,
+                    _settings.EnablePipeForward
+                },
+                ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            }, token);
+        }
+        catch (Exception ex)
+        {
+            await SendResponseAsync(ws, requestId, false, $"set_config failed: {ex.Message}", token);
+        }
+    }
+
+    private static bool ReadBool(JsonElement root, string name, bool fallback)
+    {
+        return root.TryGetProperty(name, out var el) && el.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? el.GetBoolean()
+            : fallback;
+    }
+
+    private static List<string> ReadStringList(JsonElement root, string name, List<string> fallback)
+    {
+        if (!root.TryGetProperty(name, out var el) || el.ValueKind != JsonValueKind.Array)
+        {
+            return fallback;
+        }
+
+        return el.EnumerateArray()
+            .Where(x => x.ValueKind == JsonValueKind.String)
+            .Select(x => x.GetString() ?? "")
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+    }
+
+    private static List<MonitoredAppProfile> ReadProfiles(JsonElement root, string name, List<MonitoredAppProfile> fallback)
+    {
+        if (!root.TryGetProperty(name, out var el) || el.ValueKind != JsonValueKind.Array)
+        {
+            return fallback;
+        }
+
+        var list = new List<MonitoredAppProfile>();
+        foreach (var item in el.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+            list.Add(new MonitoredAppProfile
+            {
+                Name = item.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "",
+                FilePath = item.TryGetProperty("filePath", out var f) ? (f.GetString() ?? "") : "",
+                Arguments = item.TryGetProperty("arguments", out var a) ? (a.GetString() ?? "") : "",
+            });
+        }
+
+        return list.Count > 0 ? list : fallback;
     }
 
     private async Task HandleAppStatusAsync(ClientWebSocket ws, string requestId, CancellationToken token)
@@ -437,27 +533,40 @@ public sealed class WsMonitorAgent
 
         try
         {
-            Process? startedProcess = null;
-            var launchTarget = filePath;
+            var triedTargets = BuildLaunchCandidates(name, filePath).ToList();
+            string startMode = "manager-session";
+            string startMessage = "";
+            var managerProcessId = 0;
+            var managerErrors = new List<string>();
 
-            if (string.IsNullOrWhiteSpace(launchTarget))
-            {
-                launchTarget = name.Trim();
-            }
-
-            if (string.IsNullOrWhiteSpace(launchTarget))
+            if (triedTargets.Count == 0)
             {
                 await ManagerPipePublisher.TryPublishAsync("Service", "AppStart", "failed: filePath/name both empty", token);
                 await SendResponseAsync(ws, requestId, false, "filePath or name required", token);
                 return;
             }
 
-            startedProcess = TryStartProcess(launchTarget, appArgs);
-
-            if (startedProcess == null && !launchTarget.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            string launchTarget = triedTargets[0];
+            foreach (var candidate in triedTargets)
             {
-                launchTarget += ".exe";
-                startedProcess = TryStartProcess(launchTarget, appArgs);
+                launchTarget = candidate;
+
+                // 优先尝试在 Manager 所在会话启动（用户/RDP 可见）。
+                var managerStart = await ManagerScreenshotBridge.TryStartProcessAsync(candidate, appArgs, token);
+                if (managerStart.ok)
+                {
+                    startMode = "manager-session";
+                    startMessage = managerStart.message;
+                    managerProcessId = managerStart.processId;
+                    break;
+                }
+                managerErrors.Add($"{candidate}: {managerStart.message}");
+            }
+
+            if (managerProcessId <= 0)
+            {
+                startMode = "manager-session-required";
+                startMessage = "必须在RDP/本地已登录用户会话启动；当前未检测到可用交互会话或Manager未就绪";
             }
 
             await SendJsonAsync(ws, new
@@ -465,14 +574,18 @@ public sealed class WsMonitorAgent
                 type = "response",
                 requestId,
                 clientId = _settings.ClientId,
-                ok = startedProcess != null,
-                msg = startedProcess != null ? "app started" : "start failed",
+                ok = managerProcessId > 0,
+                msg = managerProcessId > 0 ? "app started" : startMessage,
                 data = new
                 {
                     name = string.IsNullOrWhiteSpace(name) ? Path.GetFileNameWithoutExtension(launchTarget) : name,
                     filePath = launchTarget,
                     arguments = appArgs,
-                    processId = startedProcess?.Id ?? 0
+                    processId = managerProcessId,
+                    startMode,
+                    startMessage,
+                    triedTargets,
+                    managerErrors
                 },
                 ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             }, token);
@@ -480,9 +593,9 @@ public sealed class WsMonitorAgent
             await ManagerPipePublisher.TryPublishAsync(
                 "Service",
                 "AppStart",
-                startedProcess != null
-                    ? $"success: target={launchTarget}, pid={startedProcess.Id}"
-                    : $"failed: target={launchTarget}, args={appArgs}",
+                managerProcessId > 0
+                    ? $"success: target={launchTarget}, pid={managerProcessId}, mode={startMode}, msg={startMessage}"
+                    : $"failed: manager-session-required, target={launchTarget}, args={appArgs}, reason={startMessage}",
                 token);
         }
         catch (Exception ex)
@@ -490,6 +603,45 @@ public sealed class WsMonitorAgent
             await ManagerPipePublisher.TryPublishAsync("Service", "AppStart", $"exception: {ex.Message}", token);
             await SendResponseAsync(ws, requestId, false, ex.Message, token);
         }
+    }
+
+    private static IEnumerable<string> BuildLaunchCandidates(string name, string filePath)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var profilePath = (filePath ?? "").Trim();
+        var appName = (name ?? "").Trim();
+
+        if (!string.IsNullOrWhiteSpace(profilePath))
+        {
+            if (Directory.Exists(profilePath))
+            {
+                if (!string.IsNullOrWhiteSpace(appName))
+                {
+                    var normalizedName = appName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? appName : appName + ".exe";
+                    set.Add(Path.Combine(profilePath, normalizedName));
+                    set.Add(Path.Combine(profilePath, appName));
+                }
+            }
+            else
+            {
+                set.Add(profilePath);
+                if (!profilePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    set.Add(profilePath + ".exe");
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(appName))
+        {
+            set.Add(appName);
+            if (!appName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                set.Add(appName + ".exe");
+            }
+        }
+
+        return set;
     }
 
     private async Task HandleAppStopAsync(ClientWebSocket ws, string requestId, JsonElement args, CancellationToken token)
@@ -562,18 +714,6 @@ public sealed class WsMonitorAgent
             "AppStop",
             $"name={name}, pid={processId}, killed={killed}, errors={errors.Count}",
             token);
-    }
-
-    private static Process? TryStartProcess(string fileName, string arguments)
-    {
-        var info = new ProcessStartInfo
-        {
-            FileName = fileName,
-            Arguments = arguments,
-            WorkingDirectory = Path.GetDirectoryName(fileName) ?? Environment.CurrentDirectory,
-            UseShellExecute = true
-        };
-        return Process.Start(info);
     }
 
     private MonitoredAppProfile? FindProfileByName(string name)
