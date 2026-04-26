@@ -557,7 +557,7 @@ public sealed class MainForm : Form
 
     private async Task PipeLogLoopAsync(CancellationToken token)
     {
-        var pipeName = AgentSettings.FixedPipeName + "_manager";
+        var pipeName = AgentSettings.ManagerPipeName;
         while (!token.IsCancellationRequested)
         {
             try

@@ -11,7 +11,7 @@ public static class ManagerScreenshotBridge
     {
         try
         {
-            var pipeName = AgentSettings.FixedPipeName + "_manager_cmd";
+            var pipeName = AgentSettings.ServicePipeName;
             await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
             await pipe.ConnectAsync(1200, token);
             if (!pipe.IsConnected)
@@ -41,10 +41,10 @@ public static class ManagerScreenshotBridge
 
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
-            var ok = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+            var ok = TryGetBoolean(root, "ok") ?? TryGetBoolean(root, "Ok") ?? false;
             if (!ok)
             {
-                var err = root.TryGetProperty("error", out var errEl) ? errEl.GetString() : null;
+                var err = TryGetString(root, "error") ?? TryGetString(root, "Error");
                 return new ScreenshotCaptureResult { Ok = false, Error = err ?? "manager screenshot failed" };
             }
 
@@ -52,10 +52,10 @@ public static class ManagerScreenshotBridge
             {
                 Ok = true,
                 Error = null,
-                ImageBase64 = root.TryGetProperty("imageBase64", out var b64El) ? (b64El.GetString() ?? "") : "",
-                ContentType = root.TryGetProperty("contentType", out var ctEl) ? (ctEl.GetString() ?? "image/jpeg") : "image/jpeg",
-                Width = root.TryGetProperty("width", out var wEl) ? wEl.GetInt32() : 0,
-                Height = root.TryGetProperty("height", out var hEl) ? hEl.GetInt32() : 0
+                ImageBase64 = TryGetString(root, "imageBase64") ?? TryGetString(root, "ImageBase64") ?? "",
+                ContentType = TryGetString(root, "contentType") ?? TryGetString(root, "ContentType") ?? "image/jpeg",
+                Width = TryGetInt32(root, "width") ?? TryGetInt32(root, "Width") ?? 0,
+                Height = TryGetInt32(root, "height") ?? TryGetInt32(root, "Height") ?? 0
             };
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
@@ -66,5 +66,20 @@ public static class ManagerScreenshotBridge
         {
             return new ScreenshotCaptureResult { Ok = false, Error = $"manager screenshot unavailable: {ex.Message}" };
         }
+    }
+
+    private static string? TryGetString(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var el) ? el.GetString() : null;
+    }
+
+    private static bool? TryGetBoolean(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var el) ? el.GetBoolean() : null;
+    }
+
+    private static int? TryGetInt32(JsonElement root, string name)
+    {
+        return root.TryGetProperty(name, out var el) && el.TryGetInt32(out var value) ? value : null;
     }
 }

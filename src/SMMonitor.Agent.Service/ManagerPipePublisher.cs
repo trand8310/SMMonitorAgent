@@ -13,7 +13,7 @@ public static class ManagerPipePublisher
     {
         try
         {
-            var pipeName = AgentSettings.FixedPipeName + "_manager";
+            var pipeName = AgentSettings.ManagerPipeName;
             await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(TimeSpan.FromMilliseconds(300));

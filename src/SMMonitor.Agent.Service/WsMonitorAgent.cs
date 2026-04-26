@@ -898,5 +898,49 @@ public sealed class WsMonitorAgent
         {
             _sendLock.Release();
         }
+
+        await TryPublishResponseLogAsync(json, token);
+    }
+
+    private async Task TryPublishResponseLogAsync(string json, CancellationToken token)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeEl) ||
+                !string.Equals(typeEl.GetString(), "response", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var requestId = root.TryGetProperty("requestId", out var reqEl) ? (reqEl.GetString() ?? "") : "";
+            var ok = root.TryGetProperty("ok", out var okEl) && okEl.ValueKind == JsonValueKind.True
+                ? "true"
+                : (okEl.ValueKind == JsonValueKind.False ? "false" : "-");
+            var msg = root.TryGetProperty("msg", out var msgEl) ? (msgEl.GetString() ?? "") : "";
+            var dataSummary = "";
+            if (root.TryGetProperty("data", out var dataEl) && dataEl.ValueKind != JsonValueKind.Null)
+            {
+                dataSummary = dataEl.ValueKind switch
+                {
+                    JsonValueKind.Object => $"dataKeys={string.Join(",", dataEl.EnumerateObject().Select(x => x.Name).Take(6))}",
+                    JsonValueKind.Array => $"dataItems={dataEl.GetArrayLength()}",
+                    _ => $"data={dataEl.ToString()}"
+                };
+            }
+
+            var line = $"requestId={requestId}, ok={ok}, msg={msg}";
+            if (!string.IsNullOrWhiteSpace(dataSummary))
+            {
+                line += $", {dataSummary}";
+            }
+
+            await ManagerPipePublisher.TryPublishAsync("Service", "CommandResult", line, token);
+        }
+        catch
+        {
+            // never block ws send flow because of log serialization/parsing failures.
+        }
     }
 }

@@ -2,7 +2,12 @@ namespace SMMonitor.Common;
 
 public sealed class AgentSettings
 {
+    // 应用程序 -> Agent 的固定管道名
     public const string FixedPipeName = "SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d";
+    // Service -> Manager 日志/通知管道名
+    public const string ManagerPipeName = "SMMANAGER_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d";
+    // Service <-> Manager 命令/数据交互管道名
+    public const string ServicePipeName = "SMSERVICE_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d";
     public string ServerUrl { get; set; } = "ws://127.0.0.1:9502";
     public string Token { get; set; } = "your-token";
     public string ClientId { get; set; } = "";

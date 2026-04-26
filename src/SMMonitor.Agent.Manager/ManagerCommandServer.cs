@@ -11,7 +11,7 @@ public static class ManagerCommandServer
 {
     public static async Task RunAsync(Action<string> log, CancellationToken token)
     {
-        var pipeName = AgentSettings.FixedPipeName + "_manager_cmd";
+        var pipeName = AgentSettings.ServicePipeName;
         while (!token.IsCancellationRequested)
         {
             try
@@ -55,7 +55,7 @@ public static class ManagerCommandServer
         }
     }
 
-    private static (bool ok, string? error, string contentType, string imageBase64, int width, int height) HandleRequest(string line)
+    private static ManagerCaptureResponse HandleRequest(string line)
     {
         try
         {
@@ -64,7 +64,7 @@ public static class ManagerCommandServer
             var action = root.TryGetProperty("action", out var actionEl) ? (actionEl.GetString() ?? "") : "";
             if (!string.Equals(action, "capture_screen", StringComparison.OrdinalIgnoreCase))
             {
-                return (false, $"unsupported action: {action}", "image/jpeg", "", 0, 0);
+                return ManagerCaptureResponse.Fail($"unsupported action: {action}");
             }
 
             var imageFormat = root.TryGetProperty("imageFormat", out var fmt) ? (fmt.GetString() ?? "jpeg") : "jpeg";
@@ -73,16 +73,16 @@ public static class ManagerCommandServer
         }
         catch (Exception ex)
         {
-            return (false, ex.Message, "image/jpeg", "", 0, 0);
+            return ManagerCaptureResponse.Fail(ex.Message);
         }
     }
 
-    private static (bool ok, string? error, string contentType, string imageBase64, int width, int height) CapturePrimaryScreen(string imageFormat, int jpegQuality)
+    private static ManagerCaptureResponse CapturePrimaryScreen(string imageFormat, int jpegQuality)
     {
         var bounds = Screen.PrimaryScreen?.Bounds;
         if (bounds == null || bounds.Value.Width <= 0 || bounds.Value.Height <= 0)
         {
-            return (false, "manager screen is not available", "image/jpeg", "", 0, 0);
+            return ManagerCaptureResponse.Fail("manager screen is not available");
         }
 
         using var bitmap = new Bitmap(bounds.Value.Width, bounds.Value.Height);
@@ -112,7 +112,15 @@ public static class ManagerCommandServer
             bitmap.Save(ms, fmt);
         }
 
-        return (true, null, contentType, Convert.ToBase64String(ms.ToArray()), bitmap.Width, bitmap.Height);
+        return new ManagerCaptureResponse
+        {
+            Ok = true,
+            Error = null,
+            ContentType = contentType,
+            ImageBase64 = Convert.ToBase64String(ms.ToArray()),
+            Width = bitmap.Width,
+            Height = bitmap.Height
+        };
     }
 
     private static ImageFormat NormalizeFormat(string input, out string contentType)
@@ -131,5 +139,28 @@ public static class ManagerCommandServer
             contentTypeOut = ct;
             return format;
         }
+    }
+}
+
+public sealed class ManagerCaptureResponse
+{
+    public bool Ok { get; set; }
+    public string? Error { get; set; }
+    public string ContentType { get; set; } = "image/jpeg";
+    public string ImageBase64 { get; set; } = "";
+    public int Width { get; set; }
+    public int Height { get; set; }
+
+    public static ManagerCaptureResponse Fail(string message)
+    {
+        return new ManagerCaptureResponse
+        {
+            Ok = false,
+            Error = message,
+            ContentType = "image/jpeg",
+            ImageBase64 = "",
+            Width = 0,
+            Height = 0
+        };
     }
 }
