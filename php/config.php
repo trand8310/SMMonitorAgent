@@ -31,6 +31,8 @@ return [
 
     // /result 轮询超时时间
     'request_timeout_seconds' => 60,
+    // 截图类请求超时时间（screen_screenshot / app_screenshot）
+    'screenshot_request_timeout_seconds' => 200,
 
     // 请求结果在 Redis 保存多久
     'request_ttl_seconds' => 300,

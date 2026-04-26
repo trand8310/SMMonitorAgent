@@ -239,4 +239,4 @@ reboot
 其中：
 
 - 原来的“机器重启”仍发送 `action=command`，payload 里是 `{ command: "machine_restart" }`
-- 新增“Agent兼容重启”发送 `action=reboot`，适合前面给你的 .NET8 Agent 示例
+- 新增“重启系统”发送 `action=reboot`，适合前面给你的 .NET8 Agent 示例

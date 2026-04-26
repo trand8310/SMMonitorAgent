@@ -8,6 +8,17 @@
 - `SMMonitor.Agent.Manager`：WinForms 管理配置界面，修改 WS 地址、Token、ClientId、上报间隔、远程重启开关，并可启动/停止/重启服务。
 - `SMMonitor.Common`：公共配置和状态文件读写库。
 
+## 新增：指定应用监控与异常主动上报
+
+支持在配置中设置 `MonitoredApps`（进程名列表，不区分大小写，不必带 `.exe`）。
+
+- Agent 在每次 `monitor` 上报时附带 `payload.monitoredApps` 运行状态。
+- 多进程应用会按进程名聚合统计，不会漏报；同名进程会合并计算 `cpuPercent / memoryUsedMb / threadCount / processCount`。
+- 建议在配置中维护 `MonitoredAppProfiles`（`名称|完整路径|默认参数`），便于远程启动时直接使用完整路径和启动参数。
+- 支持应用通过命名管道把实时状态/日志推送给 Agent，再由 Agent 转发到后台管理页面（`index.html` 可直接查看最近消息）。
+- 监控应用状态变化（运行→停止、停止→恢复）时，会主动上报 `type=app_alert` 事件。
+- 配置 `AutoCaptureScreenshotOnAppFailure=true` 时，应用异常告警会尝试附带截图（受 Windows 服务 Session 0 隔离影响，部分机器可能不可见）。
+
 ## 目录结构
 
 ```text
@@ -110,6 +121,127 @@ C:\ProgramData\SMMonitorAgent\status.json
   "payload": {
     "delaySeconds": 5,
     "reason": "memory too high"
+  }
+}
+```
+
+### app_status
+
+```json
+{
+  "type": "request",
+  "requestId": "req_4",
+  "action": "app_status"
+}
+```
+
+### app_screenshot / screen_screenshot
+
+```json
+{
+  "type": "request",
+  "requestId": "req_5",
+  "action": "screen_screenshot",
+  "payload": {
+    "imageFormat": "jpeg",
+    "quality": 70
+  }
+}
+```
+
+### command (app_start / app_stop)
+
+远程启动应用（支持完整路径和参数）：
+
+```json
+{
+  "type": "request",
+  "requestId": "req_6",
+  "action": "command",
+  "payload": {
+    "command": "app_start",
+    "args": {
+      "name": "MyApp",
+      "filePath": "C:\\\\Apps\\\\MyApp\\\\MyApp.exe",
+      "arguments": "--env=prod --port=9001"
+    }
+  }
+}
+```
+
+远程停止应用（按 `processId` 或按 `name`）：
+
+```json
+{
+  "type": "request",
+  "requestId": "req_7",
+  "action": "command",
+  "payload": {
+    "command": "app_stop",
+    "args": {
+      "name": "MyApp",
+      "processId": 0
+    }
+  }
+}
+```
+
+## 命名管道实时消息转发
+
+在管理界面可配置：
+
+- `EnablePipeForward`：是否启用管道转发。
+- `AppPipeName`：管道标识（可点击生成 GUID 格式）。
+- 当前版本管道名固定为：`SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d`（便于客户端程序统一对接）。
+- Manager 调试日志监听管道：`SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d_manager`。
+- `pipe_live_push` 默认关闭，避免消息风暴；建议在 `index.html` 选择客户端与应用后动态打开。
+
+应用端只需写入文本行到命名管道（UTF-8，每行一条），Agent 会转发为：
+
+```json
+{
+  "type": "app_pipe_message",
+  "clientId": "192.168.1.10",
+  "token": "your-token",
+  "ts": 1710000000,
+  "payload": {
+    "pipeName": "SMMONITOR_PIPE_xxx",
+    "content": "业务状态: queue=21, workers=4"
+  }
+}
+```
+
+### 管道通信 DEMO（被监控程序 -> Agent -> Manager/Web）
+
+仓库里提供了示例程序：`demo/NamedPipeClientDemo`。
+
+运行方式（Windows）：
+
+```bash
+cd demo/NamedPipeClientDemo
+dotnet run -- --app DemoOrderApp --interval 1000
+```
+
+它会单向向固定管道 `SMMONITOR_PIPE_7f8e5fd8d6f24f7fabf4b1291bc03a3d` 写入一行 JSON（带 `app/appName` 字段），DEMO 本身不处理任何回包。
+
+联调步骤：
+
+1. 启动 `SMMonitor.Agent.Service`，并在管理工具中启用“管道转发”。  
+2. 打开 `SMMonitor.Agent.Manager` 的“日志”页，可直接看到 Service/App 分类日志。  
+3. 打开 `php/index.html`，切到“实时日志”页查看转发内容。  
+4. 若希望 Web 端实时主动推送，先在详情页打开 `pipe_live_push` 开关（默认关闭防消息风暴）。
+
+```json
+{
+  "type": "request",
+  "requestId": "req_8",
+  "action": "command",
+  "payload": {
+    "command": "pipe_live_push",
+    "args": {
+      "enabled": true,
+      "appName": "MyApp"
+    }
   }
 }
 ```
