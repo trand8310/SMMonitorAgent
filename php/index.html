@@ -408,6 +408,24 @@
         <div class="detail-item"><div class="detail-label">最后心跳</div><div class="detail-value">{{ formatTime(currentClient.lastHeartbeat) }}</div></div>
       </div>
 
+      <div class="result-card" v-if="currentClient">
+        <div style="margin-bottom:8px;font-weight:600;">实时推送控制（默认关闭，防消息风暴）</div>
+        <el-form inline>
+          <el-form-item label="监控应用">
+            <el-select v-model="livePushAppName" placeholder="全部应用" clearable style="width: 220px">
+              <el-option v-for="app in getMonitoredApps(currentClient)" :key="app.name" :label="app.name" :value="app.name"></el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="实时推送">
+            <el-switch v-model="livePushEnabled" active-text="开启" inactive-text="关闭"></el-switch>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" size="small" :loading="livePushLoading" @click="applyPipeLivePush">应用</el-button>
+          </el-form-item>
+        </el-form>
+        <div class="inline-tip">{{ livePushResultText || '关闭时不会主动推送管道消息；开启后仅推送选中应用（或全部应用）消息。' }}</div>
+      </div>
+
       <div class="result-card">
         <div style="margin-bottom:8px;font-weight:600;">原始数据</div>
         <div class="response-box">{{ prettyJson(currentClient || {}) }}</div>
@@ -708,6 +726,10 @@
           commandResultText: '',
           imagePreviewUrl: '',
           imagePreviewMeta: '',
+          livePushEnabled: false,
+          livePushAppName: '',
+          livePushLoading: false,
+          livePushResultText: '',
           commandForm: {
             appStart: { name: '', filePath: '', arguments: '' },
             appStop: { name: '', processId: 0 },
@@ -1123,6 +1145,9 @@
 
         openDetailDialog(row) {
           this.currentClient = row
+          this.livePushEnabled = false
+          this.livePushAppName = this.getMonitoredApps(row)?.[0]?.name || ''
+          this.livePushResultText = ''
           this.detailDialogVisible = true
         },
 
