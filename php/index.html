@@ -262,24 +262,6 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="机器名" min-width="150">
-          <template #default="{ row }">
-            <div>{{ row.machineName || '-' }}</div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="版本" min-width="100">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.version || '-' }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="分组" min-width="110">
-          <template #default="{ row }">
-            <div>{{ row.group || '-' }}</div>
-          </template>
-        </el-table-column>
-
         <el-table-column label="CPU" width="105" align="center">
           <template #default="{ row }">
             <span class="metric" :class="metricClass(row.cpu, 80, 95)">
@@ -342,31 +324,6 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="最近告警" min-width="180">
-          <template #default="{ row }">
-            <template v-if="row.lastAppAlert">
-              <div :class="row.lastAppAlert.level === 'critical' ? 'danger-text' : 'metric-warn'">
-                {{ row.lastAppAlert?.payload?.app || '-' }} {{ row.lastAppAlert?.payload?.status || '' }}
-              </div>
-              <div class="muted">{{ formatTime(row.lastAppAlert.ts) }}</div>
-            </template>
-            <div v-else class="muted">-</div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="实时管道消息" min-width="240">
-          <template #default="{ row }">
-            <template v-if="row.lastPipeMessage">
-              <div class="muted">{{ row.lastPipeMessage?.payload?.pipeName || '-' }}</div>
-              <div style="font-family: Consolas, Monaco, monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                {{ row.lastPipeMessage?.payload?.content || '-' }}
-              </div>
-              <div class="muted">{{ formatTime(row.lastPipeMessage.ts) }}</div>
-            </template>
-            <div v-else class="muted">-</div>
-          </template>
-        </el-table-column>
-
         <el-table-column label="最后心跳" min-width="170">
           <template #default="{ row }">
             <div>{{ formatTime(row.lastHeartbeat) }}</div>
@@ -380,12 +337,11 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="360" fixed="right" align="center">
+        <el-table-column label="操作" width="340" fixed="right" align="center">
           <template #default="{ row }">
             <div class="action-buttons">
               <el-button size="small" @click="openDetailDialog(row)">详情</el-button>
-              <el-button size="small" @click="openSettingDialog(row)">设置</el-button>
-              <el-button size="small" type="primary" @click="openCommDialog(row)">通信</el-button>
+              <el-button size="small" type="warning" @click="handleClientAction('agent_reboot', row)">Agent兼容重启</el-button>
 
               <el-dropdown trigger="click" @command="(cmd) => handleClientAction(cmd, row)">
                 <el-button size="small" type="success">
@@ -398,9 +354,7 @@
                     <el-dropdown-item command="get_config">获取配置</el-dropdown-item>
                     <el-dropdown-item divided command="app_start">手动启动应用</el-dropdown-item>
                     <el-dropdown-item command="app_stop">手动停止应用</el-dropdown-item>
-                    <el-dropdown-item divided command="app_screenshot">应用截图</el-dropdown-item>
-                    <el-dropdown-item command="screen_screenshot">屏幕截图</el-dropdown-item>
-                    <el-dropdown-item command="agent_reboot">Agent兼容重启</el-dropdown-item>
+                    <el-dropdown-item divided command="screen_screenshot">屏幕截图</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
