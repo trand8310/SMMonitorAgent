@@ -1149,7 +1149,7 @@
                 const data = await res.json()
 
                 if (typeof onUpdate === 'function') {
-                  onUpdate(data)
+                  onUpdate(data, requestId)
                 }
 
                 if (data.success && (data.status === 'done' || data.status === 'timeout' || data.status === 'failed')) {
@@ -1208,8 +1208,8 @@
                   appName: (this.livePushAppName || '').trim()
                 }
               },
-              (data) => {
-                this.livePushResultText = `requestId: ${requestId}\n${this.prettyJson(data)}`
+              (data, cbRequestId) => {
+                this.livePushResultText = `requestId: ${cbRequestId}\n${this.prettyJson(data)}`
               }
             )
 
@@ -1475,8 +1475,8 @@
               this.currentClient.clientId,
               'set_config',
               { config: parsed },
-              (data) => {
-                this.settingResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+              (data, cbRequestId) => {
+                this.settingResultText = `requestId: ${cbRequestId}\n\n${this.prettyJson(data)}`
               }
             )
 
@@ -1684,8 +1684,8 @@
               this.currentClient.clientId,
               action,
               payload,
-              (data) => {
-                this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(data)}`
+              (data, cbRequestId) => {
+                this.commandResultText = `requestId: ${cbRequestId}\n\n${this.prettyJson(data)}`
               }
             )
 

@@ -592,6 +592,11 @@ public sealed class MainForm : Form
             item.Category = "Service";
         }
 
+        if (string.Equals(item.Source, "ConfigSync", StringComparison.OrdinalIgnoreCase))
+        {
+            TryApplyRemoteConfigSync(item.Message);
+        }
+
         lock (_logLock)
         {
             _logs.Insert(0, item);
@@ -602,6 +607,38 @@ public sealed class MainForm : Form
         }
 
         RefreshLogList();
+    }
+
+    private void TryApplyRemoteConfigSync(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<ManagerConfigSyncPayload>(message);
+            if (payload == null)
+            {
+                return;
+            }
+
+            BeginInvoke(() =>
+            {
+                _txtMonitoredApps.Text = string.Join(Environment.NewLine, BuildMonitoredAppLines(new AgentSettings
+                {
+                    MonitoredApps = payload.MonitoredApps ?? new List<string>(),
+                    MonitoredAppProfiles = payload.MonitoredAppProfiles ?? new List<MonitoredAppProfile>()
+                }));
+                _chkAutoCaptureOnFailure.Checked = payload.AutoCaptureScreenshotOnAppFailure;
+                _chkEnablePipeForward.Checked = payload.EnablePipeForward;
+            });
+        }
+        catch
+        {
+            // ignore malformed payload
+        }
     }
 
     private void RefreshLogList()
@@ -640,4 +677,12 @@ public sealed class ManagerPipeLog
     public string Category { get; set; } = "App";
     public string Source { get; set; } = "";
     public string Message { get; set; } = "";
+}
+
+public sealed class ManagerConfigSyncPayload
+{
+    public List<string>? MonitoredApps { get; set; }
+    public List<MonitoredAppProfile>? MonitoredAppProfiles { get; set; }
+    public bool AutoCaptureScreenshotOnAppFailure { get; set; }
+    public bool EnablePipeForward { get; set; }
 }

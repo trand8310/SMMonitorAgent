@@ -358,6 +358,7 @@ public sealed class WsMonitorAgent
             _settings.EnablePipeForward = ReadBool(cfgEl, "enablePipeForward", _settings.EnablePipeForward);
 
             AgentConfigStore.Save(_settings);
+            await NotifyManagerConfigUpdatedAsync(token);
 
             await SendJsonAsync(ws, new
             {
@@ -380,6 +381,19 @@ public sealed class WsMonitorAgent
         {
             await SendResponseAsync(ws, requestId, false, $"set_config failed: {ex.Message}", token);
         }
+    }
+
+    private async Task NotifyManagerConfigUpdatedAsync(CancellationToken token)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            monitoredApps = _settings.MonitoredApps,
+            monitoredAppProfiles = _settings.MonitoredAppProfiles,
+            autoCaptureScreenshotOnAppFailure = _settings.AutoCaptureScreenshotOnAppFailure,
+            enablePipeForward = _settings.EnablePipeForward
+        });
+
+        await ManagerPipePublisher.TryPublishAsync("Service", "ConfigSync", payload, token);
     }
 
     private static bool ReadBool(JsonElement root, string name, bool fallback)
