@@ -8,6 +8,14 @@
 - `SMMonitor.Agent.Manager`：WinForms 管理配置界面，修改 WS 地址、Token、ClientId、上报间隔、远程重启开关，并可启动/停止/重启服务。
 - `SMMonitor.Common`：公共配置和状态文件读写库。
 
+## 新增：指定应用监控与异常主动上报
+
+支持在配置中设置 `MonitoredApps`（进程名列表，不区分大小写，不必带 `.exe`）。
+
+- Agent 在每次 `monitor` 上报时附带 `payload.monitoredApps` 运行状态。
+- 监控应用状态变化（运行→停止、停止→恢复）时，会主动上报 `type=app_alert` 事件。
+- 配置 `AutoCaptureScreenshotOnAppFailure=true` 时，应用异常告警会尝试附带截图（受 Windows 服务 Session 0 隔离影响，部分机器可能不可见）。
+
 ## 目录结构
 
 ```text
@@ -110,6 +118,30 @@ C:\ProgramData\SMMonitorAgent\status.json
   "payload": {
     "delaySeconds": 5,
     "reason": "memory too high"
+  }
+}
+```
+
+### app_status
+
+```json
+{
+  "type": "request",
+  "requestId": "req_4",
+  "action": "app_status"
+}
+```
+
+### app_screenshot / screen_screenshot
+
+```json
+{
+  "type": "request",
+  "requestId": "req_5",
+  "action": "screen_screenshot",
+  "payload": {
+    "imageFormat": "jpeg",
+    "quality": 70
   }
 }
 ```

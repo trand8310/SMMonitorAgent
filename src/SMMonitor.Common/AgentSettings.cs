@@ -14,6 +14,17 @@ public sealed class AgentSettings
     public int CpuAlertPercent { get; set; } = 95;
     public int MemoryAlertPercent { get; set; } = 90;
     public int DiskAlertPercent { get; set; } = 90;
+
+    /// <summary>
+    /// 需要监控的应用进程名列表（不区分大小写，支持不带 .exe）。
+    /// 例如：["notepad", "chrome", "MyApp.exe"]
+    /// </summary>
+    public List<string> MonitoredApps { get; set; } = new();
+
+    /// <summary>
+    /// 监控应用异常时，是否自动尝试采集屏幕截图并随告警一起上报。
+    /// </summary>
+    public bool AutoCaptureScreenshotOnAppFailure { get; set; } = false;
 }
 
 public sealed class AgentStatus

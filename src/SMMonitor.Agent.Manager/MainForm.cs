@@ -18,6 +18,8 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _numDisk = new();
     private readonly CheckBox _chkEnableUpload = new();
     private readonly CheckBox _chkEnableReboot = new();
+    private readonly CheckBox _chkAutoCaptureOnFailure = new();
+    private readonly TextBox _txtMonitoredApps = new();
 
     private readonly Label _lblServiceStatus = new();
     private readonly Label _lblWsStatus = new();
@@ -86,6 +88,13 @@ public sealed class MainForm : Form
         AddRow(root, "CPU阈值 %", _numCpu);
         AddRow(root, "内存阈值 %", _numMemory);
         AddRow(root, "磁盘阈值 %", _numDisk);
+
+        _txtMonitoredApps.Multiline = true;
+        _txtMonitoredApps.ScrollBars = ScrollBars.Vertical;
+        AddRow(root, "监控应用(每行一个)", _txtMonitoredApps, 96);
+
+        _chkAutoCaptureOnFailure.Text = "应用异常时自动截图并随告警上报";
+        AddRow(root, "异常截图", _chkAutoCaptureOnFailure);
 
         AddTitle(root, "操作");
 
@@ -208,6 +217,8 @@ public sealed class MainForm : Form
         _numCpu.Value = Math.Clamp(cfg.CpuAlertPercent, 1, 100);
         _numMemory.Value = Math.Clamp(cfg.MemoryAlertPercent, 1, 100);
         _numDisk.Value = Math.Clamp(cfg.DiskAlertPercent, 1, 100);
+        _txtMonitoredApps.Text = string.Join(Environment.NewLine, cfg.MonitoredApps ?? new List<string>());
+        _chkAutoCaptureOnFailure.Checked = cfg.AutoCaptureScreenshotOnAppFailure;
     }
 
     private void SaveConfig()
@@ -223,7 +234,11 @@ public sealed class MainForm : Form
             EnableRemoteReboot = _chkEnableReboot.Checked,
             CpuAlertPercent = (int)_numCpu.Value,
             MemoryAlertPercent = (int)_numMemory.Value,
-            DiskAlertPercent = (int)_numDisk.Value
+            DiskAlertPercent = (int)_numDisk.Value,
+            MonitoredApps = _txtMonitoredApps.Text
+                .Split(new[] { '\r', '\n', ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList(),
+            AutoCaptureScreenshotOnAppFailure = _chkAutoCaptureOnFailure.Checked
         };
 
         AgentConfigStore.Save(cfg);

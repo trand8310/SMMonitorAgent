@@ -166,6 +166,7 @@ function save_client_state(Redis $redis, array $config, string $prefix, string $
     $row['memoryTotalMb'] = $payload['memoryTotalMb'] ?? $payload['MemoryTotalMb'] ?? ($old['memoryTotalMb'] ?? null);
     $row['memoryAvailableMb'] = $payload['memoryAvailableMb'] ?? $payload['MemoryAvailableMb'] ?? ($old['memoryAvailableMb'] ?? null);
     $row['disks'] = $payload['disks'] ?? $payload['Disks'] ?? ($old['disks'] ?? []);
+    $row['monitoredApps'] = $payload['monitoredApps'] ?? $payload['MonitoredApps'] ?? ($old['monitoredApps'] ?? []);
 
     $ttl = (int)($config['client_ttl_seconds'] ?? 180);
 
@@ -329,6 +330,50 @@ $server->on('Message', function (Server $server, Swoole\WebSocket\Frame $frame) 
             echo '[' . date('H:i:s') . "] monitor {$clientId} cpu={$cpu} mem={$mem}\n";
         }
 
+        return;
+    }
+
+    if ($type === 'app_alert') {
+        $clientId = (string)($data['clientId'] ?? ($fdClientMap[$frame->fd] ?? ''));
+        if ($clientId !== '') {
+            $clientFdMap[$clientId] = $frame->fd;
+            $fdClientMap[$frame->fd] = $clientId;
+        }
+
+        $payload = is_array($data['payload'] ?? null) ? $data['payload'] : [];
+        if (isset($payload['screenshot']) && is_array($payload['screenshot'])) {
+            $converted = save_base64_file_if_needed($redis, $config, $prefix, ['data' => $payload['screenshot']]);
+            if (isset($converted['data']) && is_array($converted['data'])) {
+                $payload['screenshot'] = $converted['data'];
+            }
+        }
+
+        $alert = [
+            'type' => 'app_alert',
+            'level' => (string)($data['level'] ?? 'warning'),
+            'clientId' => $clientId,
+            'payload' => $payload,
+            'ts' => (int)($data['ts'] ?? now_ts()),
+        ];
+
+        if ($clientId !== '') {
+            $clientKey = $prefix . 'client:' . $clientId;
+            $clientRaw = $redis->get($clientKey);
+            if (is_string($clientRaw) && $clientRaw !== '') {
+                $clientData = json_decode($clientRaw, true);
+                if (is_array($clientData)) {
+                    $clientData['lastAppAlert'] = $alert;
+                    $ttl = (int)($config['client_ttl_seconds'] ?? 180);
+                    $redis->setex($clientKey, $ttl, json_encode_cn($clientData));
+                }
+            }
+        }
+
+        $redis->lPush($prefix . 'app_alerts', json_encode_cn($alert));
+        $redis->lTrim($prefix . 'app_alerts', 0, 299);
+        $redis->expire($prefix . 'app_alerts', (int)($config['request_ttl_seconds'] ?? 300));
+
+        echo '[' . date('H:i:s') . "] app_alert {$clientId}\n";
         return;
     }
 

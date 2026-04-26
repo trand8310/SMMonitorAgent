@@ -48,6 +48,12 @@ public static class AgentConfigStore
             settings.UploadIntervalSeconds = 5;
         }
 
+        settings.MonitoredApps = (settings.MonitoredApps ?? new List<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(NormalizeProcessName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return settings;
     }
 
@@ -59,6 +65,12 @@ public static class AgentConfigStore
         {
             settings.ClientId = GetLocalIp() ?? Environment.MachineName;
         }
+
+        settings.MonitoredApps = (settings.MonitoredApps ?? new List<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(NormalizeProcessName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         WriteJsonAtomic(ConfigFile, settings);
     }
@@ -119,5 +131,16 @@ public static class AgentConfigStore
         {
             return null;
         }
+    }
+
+    private static string NormalizeProcessName(string raw)
+    {
+        var value = raw.Trim();
+        if (value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            value = value[..^4];
+        }
+
+        return value;
     }
 }
