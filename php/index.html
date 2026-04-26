@@ -341,7 +341,7 @@
           <template #default="{ row }">
             <div class="action-buttons">
               <el-button size="small" @click="openDetailDialog(row)">详情</el-button>
-              <el-button size="small" type="warning" @click="handleClientAction('agent_reboot', row)">Agent兼容重启</el-button>
+              <el-button size="small" type="warning" @click="handleClientAction('agent_reboot', row)">重启系统</el-button>
 
               <el-dropdown trigger="click" @command="(cmd) => handleClientAction(cmd, row)">
                 <el-button size="small" type="success">
@@ -654,7 +654,7 @@
           </span>
         </div>
         <div class="inline-tip" v-if="commandType === 'agent_reboot'">
-          Agent兼容重启会发送 action=reboot，适合前面 .NET8 示例服务端客户端协议。
+          重启系统会发送 action=reboot，适合前面 .NET8 示例服务端客户端协议。
         </div>
       </template>
 
@@ -1521,7 +1521,7 @@
             app_stop: '手动停止应用',
             app_screenshot: '应用截图',
             screen_screenshot: '屏幕截图',
-            agent_reboot: 'Agent兼容重启'
+            agent_reboot: '重启系统'
           }
 
           this.commandType = command
