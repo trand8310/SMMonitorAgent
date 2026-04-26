@@ -613,14 +613,17 @@
           :closable="false"
           show-icon
         ></el-alert>
-
-        <div v-if="imagePreviewUrl" class="preview-image-wrap">
-          <img :src="imagePreviewUrl" class="preview-image" />
-          <div class="inline-tip" style="margin-top: 10px;">
-            {{ imagePreviewMeta }}
-          </div>
-        </div>
       </template>
+
+      <div
+        v-if="(commandType === 'app_screenshot' || commandType === 'screen_screenshot') && imagePreviewUrl"
+        class="preview-image-wrap"
+      >
+        <img :src="imagePreviewUrl" class="preview-image" />
+        <div class="inline-tip" style="margin-top: 10px;">
+          {{ imagePreviewMeta }}
+        </div>
+      </div>
 
       <template v-if="commandType === 'agent_reboot'">
         <el-alert
@@ -932,6 +935,16 @@
           }
         },
 
+        extractResultMessage(result, fallback = '') {
+          if (!result || typeof result !== 'object') return fallback
+          return (
+            result?.response?.msg ||
+            result?.response?.message ||
+            result?.message ||
+            fallback
+          )
+        },
+
         parseConfig(config) {
           if (!config) return null
           let obj = config
@@ -1106,16 +1119,23 @@
         async quickStartMonitoredApp(row, app) {
           if (!row?.clientId || !app?.name) return
           try {
-            const { result } = await this.sendAndWait(
+            const { requestId, result } = await this.sendAndWait(
               row.clientId,
               'command',
               { command: 'app_start', args: { name: app.name } }
             )
             if (result?.success && result?.status === 'done') {
-              ElMessage.success(`已下发启动：${app.name}`)
+              const msg = this.extractResultMessage(result, `已启动：${app.name}`)
+              ElMessage.success(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
               this.loadClients(false)
+            } else if (result?.success && result?.status === 'timeout') {
+              ElMessage.warning(`启动超时：${app.name}`)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
             } else {
-              ElMessage.warning(`启动返回异常：${app.name}`)
+              const msg = this.extractResultMessage(result, `启动返回异常：${app.name}`)
+              ElMessage.warning(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
             }
           } catch (err) {
             ElMessage.error(err.message || `启动失败：${app.name}`)
@@ -1125,16 +1145,23 @@
         async quickStopMonitoredApp(row, app) {
           if (!row?.clientId || !app?.name) return
           try {
-            const { result } = await this.sendAndWait(
+            const { requestId, result } = await this.sendAndWait(
               row.clientId,
               'command',
               { command: 'app_stop', args: { name: app.name } }
             )
             if (result?.success && result?.status === 'done') {
-              ElMessage.success(`已下发停止：${app.name}`)
+              const msg = this.extractResultMessage(result, `已停止：${app.name}`)
+              ElMessage.success(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
               this.loadClients(false)
+            } else if (result?.success && result?.status === 'timeout') {
+              ElMessage.warning(`停止超时：${app.name}`)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
             } else {
-              ElMessage.warning(`停止返回异常：${app.name}`)
+              const msg = this.extractResultMessage(result, `停止返回异常：${app.name}`)
+              ElMessage.warning(msg)
+              this.commandResultText = `requestId: ${requestId}\n\n${this.prettyJson(result)}`
             }
           } catch (err) {
             ElMessage.error(err.message || `停止失败：${app.name}`)
@@ -1331,13 +1358,14 @@
 
           if (this.commandType === 'app_start') {
             const filePath = (this.commandForm.appStart.filePath || '').trim()
-            if (!filePath) {
-              ElMessage.warning('请填写应用路径')
+            const name = (this.commandForm.appStart.name || '').trim()
+            if (!filePath && !name) {
+              ElMessage.warning('应用路径和应用名称至少填写一个')
               return
             }
 
             payload.args = {
-              name: (this.commandForm.appStart.name || '').trim(),
+              name,
               filePath,
               arguments: (this.commandForm.appStart.arguments || '').trim()
             }
@@ -1413,7 +1441,7 @@
               const height = respData?.height || 0
               const captureMode = respData?.captureMode || ''
               const status = respData?.status || ''
-              const message = respData?.message || respData?.msg || '执行成功'
+              const message = respData?.message || respData?.msg || result?.response?.msg || '执行成功'
               const fullFileUrl = fileUrl ? `${this.apiBase}${fileUrl}` : ''
 
               if (this.commandType === 'app_screenshot' || this.commandType === 'screen_screenshot') {
